@@ -27,6 +27,7 @@
 #include "player.h"
 #include "levels/trigs.h"
 #include "utils/is_of.hpp"
+#include "utils/quest_spots.hpp"
 #include "utils/screen_reader.hpp"
 
 namespace devilution {
@@ -56,6 +57,7 @@ std::optional<uint32_t> LastInteractableId;
 enum class InteractTargetType : uint8_t {
 	Item,
 	Object,
+	QuestSpot,
 };
 
 struct InteractTarget {
@@ -209,7 +211,15 @@ std::optional<InteractTarget> FindInteractTargetInRange(const Player &player, Po
 		}
 	}
 
-	return best;
+	if (best)
+		return best;
+
+	for (const QuestSpot &spot : CollectQuestSpots()) {
+		if (IsQuestSpotInRange(spot, playerPosition))
+			return InteractTarget { .type = InteractTargetType::QuestSpot, .id = static_cast<int>(spot.id), .position = spot.position };
+	}
+
+	return std::nullopt;
 }
 
 [[nodiscard]] bool UpdateInteractCue(const Point playerPosition, uint32_t now)
@@ -224,9 +234,7 @@ std::optional<InteractTarget> FindInteractTargetInRange(const Player &player, Po
 		return false;
 	}
 
-	const uint32_t id = target->type == InteractTargetType::Item
-	    ? (1U << 16) | static_cast<uint32_t>(target->id)
-	    : (2U << 16) | static_cast<uint32_t>(target->id);
+	const uint32_t id = (static_cast<uint32_t>(target->type) + 1U) << 16 | static_cast<uint32_t>(target->id);
 	if (LastInteractableId && *LastInteractableId == id)
 		return false;
 
@@ -238,11 +246,13 @@ std::optional<InteractTarget> FindInteractTargetInRange(const Player &player, Po
 			const StringOrView name = item.getName();
 			if (!name.empty())
 				SpeakText(name.str(), /*force=*/true);
-		} else {
+		} else if (target->type == InteractTargetType::Object) {
 			const Object &object = Objects[target->id];
 			const StringOrView name = object.name();
 			if (!name.empty())
 				SpeakText(name.str(), /*force=*/true);
+		} else if (const std::optional<QuestSpot> spot = FindQuestSpot(static_cast<QuestSpotId>(target->id)); spot) {
+			SpeakText(QuestSpotInRangeMessage(*spot, player), /*force=*/true);
 		}
 	}
 
@@ -416,7 +426,8 @@ void UpdateProximityAudioCues()
 		}
 
 		for (int i = 0; i < numtrigs; ++i) {
-			if (!IsAnyOf(trigs[i]._tmsg, WM_DIABNEXTLVL, WM_DIABPREVLVL))
+			// WM_DIABTWARPUP is the only way up from Nest 1 and Crypt 1, and a shortcut on levels 5, 9 and 13.
+			if (!IsAnyOf(trigs[i]._tmsg, WM_DIABNEXTLVL, WM_DIABPREVLVL, WM_DIABTWARPUP))
 				continue;
 
 			if (!pool.IsLoaded(SoundPool::SoundId::Stairs))

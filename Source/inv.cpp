@@ -34,6 +34,7 @@
 #include "inv_iterators.hpp"
 #include "levels/tile_properties.hpp"
 #include "levels/town.h"
+#include "levels/trigs.h"
 #include "minitext.h"
 #include "options.h"
 #include "panels/ui_panels.hpp"
@@ -2207,6 +2208,13 @@ bool UseInvItem(int cii)
 			player.RemoveInvItem(c);
 			return true;
 		}
+	}
+
+	// Away from its spot the rune bomb does nothing and the map only shows a picture.
+	if (item->IDidx == IDI_RUNEBOMB && !IsWarpOpen(DTYPE_NEST)) {
+		SpeakText(_("The rune bomb only works right next to the growth in the farmer's orchard, in town. The tracker lists it under quest locations."), /*force=*/true);
+	} else if (item->IDidx == IDI_MAPOFDOOM && !IsWarpOpen(DTYPE_CRYPT)) {
+		SpeakText(_("The Cathedral Map marks a grave in the town graveyard. Use the map right next to that grave. The tracker lists it under quest locations."), /*force=*/true);
 	}
 
 	if (!item->isUsable())

@@ -44,11 +44,13 @@
 #include "qol/chatlog.h"
 #include "quests.h"
 #include "stores.h"
+#include "tables/textdat.h"
 #include "towners.h"
 #include "utils/accessibility_announcements.hpp"
 #include "utils/is_of.hpp"
 #include "utils/language.h"
 #include "utils/navigation_speech.hpp"
+#include "utils/quest_spots.hpp"
 #include "utils/screen_reader.hpp"
 #include "utils/sdl_compat.h"
 #include "utils/str_cat.hpp"
@@ -305,6 +307,25 @@ struct TrackerCandidate {
 	return { encoded % MAXDUNX, encoded / MAXDUNX };
 }
 
+// Quest spot ids share the QuestLocations id space with quest indices, trigger indices and
+// (negative) red portal ids, so they start far above any of those.
+constexpr int QuestSpotTrackerIdBase = 10000;
+
+[[nodiscard]] constexpr int QuestSpotTrackerId(QuestSpotId id)
+{
+	return QuestSpotTrackerIdBase + static_cast<int>(id);
+}
+
+[[nodiscard]] constexpr bool IsQuestSpotTrackerId(int id)
+{
+	return id >= QuestSpotTrackerIdBase && id < QuestSpotTrackerIdBase + 256;
+}
+
+[[nodiscard]] constexpr QuestSpotId QuestSpotIdForTrackerId(int id)
+{
+	return static_cast<QuestSpotId>(id - QuestSpotTrackerIdBase);
+}
+
 [[nodiscard]] StringOrView ItemLabelForSpeech(const Item &item)
 {
 	const StringOrView name = item.getName();
@@ -432,6 +453,15 @@ struct TrackerCandidate {
 		if (object._otype == _object_id::OBJ_MCIRCLE1)
 			return _("Central magic circle");
 		return _("Magic circle");
+	}
+
+	if (leveltype == DTYPE_CRYPT && currlevel == 24) {
+		if (object._otype == OBJ_L5LEVER)
+			return _("Na-Krul's lever");
+		// The three books by Na-Krul's door share one title; their words tell them apart, and the
+		// tracker's distance-based numbering changes as the player moves.
+		if (object._otype == OBJ_L5BOOKS && object._oVar8 >= 6 && object._oVar8 <= 8 && static_cast<size_t>(object._oVar2) < Speeches.size())
+			return StrCat(object.name(), ": ", _(Speeches[object._oVar2].txtstr));
 	}
 
 	return object.name();
@@ -847,8 +877,21 @@ template <typename Predicate>
 [[nodiscard]] std::vector<TrackerCandidate> CollectQuestLocationTrackerCandidates(Point playerPosition)
 {
 	std::vector<TrackerCandidate> result;
-	if (MyPlayer == nullptr || leveltype == DTYPE_TOWN)
+	if (MyPlayer == nullptr)
 		return result;
+
+	for (const QuestSpot &spot : CollectQuestSpots()) {
+		result.push_back(TrackerCandidate {
+		    .id = QuestSpotTrackerId(spot.id),
+		    .distance = playerPosition.WalkingDistance(spot.position),
+		    .name = QuestSpotLabel(spot.id),
+		});
+	}
+
+	if (leveltype == DTYPE_TOWN) {
+		std::sort(result.begin(), result.end(), IsBetterTrackerCandidate);
+		return result;
+	}
 
 	if (setlevel) {
 		for (int i = 0; i < numtrigs; ++i) {
@@ -1305,6 +1348,7 @@ std::optional<int> ResolveObjectTrackerTarget(
 			TrackerTargetCategory::Npcs,
 			TrackerTargetCategory::Players,
 			TrackerTargetCategory::DungeonEntrances,
+			TrackerTargetCategory::QuestLocations,
 			TrackerTargetCategory::Portals,
 		};
 	}
@@ -1565,7 +1609,7 @@ void SelectTrackerTargetCategoryRelative(int delta)
 {
 	return IsNoneOf(category, TrackerTargetCategory::Items, TrackerTargetCategory::DeadBodies,
 	    TrackerTargetCategory::Npcs, TrackerTargetCategory::Players,
-	    TrackerTargetCategory::DungeonEntrances, TrackerTargetCategory::Portals);
+	    TrackerTargetCategory::DungeonEntrances, TrackerTargetCategory::QuestLocations, TrackerTargetCategory::Portals);
 }
 
 void SelectTrackerTargetRelative(int delta)
@@ -2176,7 +2220,19 @@ void NavigateToTrackerTargetKeyPressed()
 		targetName = std::string(it->name.str());
 		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
 		if (!cycleTarget) {
-			if (setlevel) {
+			if (IsQuestSpotTrackerId(*targetId)) {
+				const std::optional<QuestSpot> spot = FindQuestSpot(QuestSpotIdForTrackerId(*targetId));
+				if (!spot) {
+					lockedTargetId = -1;
+					SpeakText(_("No quest locations found."), true);
+					return;
+				}
+				if (IsQuestSpotInRange(*spot, playerPosition)) {
+					SpeakText(QuestSpotInRangeMessage(*spot, *MyPlayer), true);
+					return;
+				}
+				targetPosition = FindQuestSpotApproachTile(*MyPlayer, playerPosition, *spot).value_or(spot->position);
+			} else if (setlevel) {
 				if (IsRedPortalTrackerId(*targetId)) {
 					targetPosition = RedPortalPositionForTrackerId(*targetId);
 				} else {
@@ -2585,7 +2641,7 @@ void AutoWalkToTrackerTargetKeyPressed()
 			return;
 		}
 
-		if ((setlevel && lockedTargetId >= 0 && lockedTargetId < numtrigs) || (!setlevel && lockedTargetId >= 0 && lockedTargetId < static_cast<int>(sizeof(Quests) / sizeof(Quests[0])))) {
+		if (lockedTargetId != -1) {
 			const auto it = std::find_if(candidates.begin(), candidates.end(), [id = lockedTargetId](const TrackerCandidate &c) { return c.id == id; });
 			if (it != candidates.end())
 				targetId = lockedTargetId;
@@ -2846,6 +2902,21 @@ void UpdateAutoWalkTracker()
 		break;
 	}
 	case TrackerTargetCategory::QuestLocations: {
+		if (IsQuestSpotTrackerId(AutoWalkTrackerTargetId)) {
+			const std::optional<QuestSpot> spot = FindQuestSpot(QuestSpotIdForTrackerId(AutoWalkTrackerTargetId));
+			if (!spot) {
+				AutoWalkTrackerTargetId = -1;
+				SpeakText(_("Target quest location is gone."), true);
+				return;
+			}
+			if (IsQuestSpotInRange(*spot, playerPosition)) {
+				AutoWalkTrackerTargetId = -1;
+				SpeakText(QuestSpotInRangeMessage(*spot, myPlayer), true);
+				return;
+			}
+			destination = FindQuestSpotApproachTile(myPlayer, playerPosition, *spot);
+			break;
+		}
 		if (setlevel) {
 			const int triggerIndex = AutoWalkTrackerTargetId;
 			if (leveltype == DTYPE_TOWN || triggerIndex < 0 || triggerIndex >= numtrigs) {

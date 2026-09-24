@@ -40,6 +40,7 @@
 #include "hwcursor.hpp"
 #include "inv.h"
 #include "items.h"
+#include "levels/crypt.h"
 #include "levels/tile_properties.hpp"
 #include "levels/town.h"
 #include "levels/trigs.h"
@@ -49,6 +50,7 @@
 #include "panels/spell_list.hpp"
 #include "panels/ui_panels.hpp"
 #include "qol/chatlog.h"
+#include "quests.h"
 #include "qol/stash.h"
 #include "stores.h"
 #include "towners.h"
@@ -541,6 +543,32 @@ bool IsStandingGround()
 	return false;
 }
 
+/**
+ * Na-Krul's lever opens his chamber with him at full strength, and afterwards the three spellbooks
+ * can no longer weaken him. One of those books stands right beside it, so the interact keys (which
+ * pick whatever adjacent object the player faces) only warn on the first press.
+ */
+bool ConfirmOperateObject(const Object &object)
+{
+	static const Object *warnedLever = nullptr;
+	static uint32_t warnedAt = 0;
+
+	const bool isNaKrulLever = leveltype == DTYPE_CRYPT && currlevel == 24 && object._otype == OBJ_L5LEVER
+	    && !IsUberRoomOpened && !IsUberLeverActivated && Quests[Q_NAKRUL]._qactive != QUEST_DONE;
+	if (!isNaKrulLever)
+		return true;
+
+	const uint32_t now = SDL_GetTicks();
+	if (warnedLever == &object && now - warnedAt < 10000) {
+		warnedLever = nullptr;
+		return true;
+	}
+	warnedLever = &object;
+	warnedAt = now;
+	SpeakText(_("Na-Krul's lever. Pulling it releases Na-Krul at full strength, and the spellbooks can no longer weaken him. Press again to pull it."), /*force=*/true);
+	return false;
+}
+
 void Interact()
 {
 	if (leveltype == DTYPE_TOWN && pcursmonst != -1) {
@@ -585,6 +613,8 @@ void Interact()
 	}
 
 	if (ObjectUnderCursor != nullptr) {
+		if (!ConfirmOperateObject(*ObjectUnderCursor))
+			return;
 		NetSendCmdLoc(MyPlayerId, true, CMD_OPOBJXY, cursPosition);
 		LastPlayerAction = PlayerActionType::OperateObject;
 		return;
@@ -2495,6 +2525,11 @@ bool TryDropItem()
 	}
 
 	std::optional<Point> itemTile = FindAdjacentPositionForItem(myPlayer.position.future, myPlayer._pdir);
+	// The Cornerstone of the World only keeps an item dropped exactly on its tile, which dropping
+	// towards the facing direction rarely hits.
+	if (CornerStone.isAvailable() && CornerStone.item.isEmpty() && myPlayer.position.future.WalkingDistance(CornerStone.position) <= 1
+	    && CanPut(CornerStone.position))
+		itemTile = CornerStone.position;
 	if (!itemTile) {
 		myPlayer.Say(HeroSpeech::WhereWouldIPutThis);
 		return false;
@@ -2571,6 +2606,9 @@ void CtrlUseInvItem()
 		if (GetSpellData(item._iSpell).isTargeted()) {
 			UpdateSpellTarget(item._iSpell);
 		}
+	} else if (item.isRune()) {
+		// Hellfire runes wait for a target like targeted scrolls; aim at the tile in front of the player.
+		UpdateSpellTarget(item._iSpell);
 	}
 
 	const int itemId = GetItemIdOnSlot(Slot);
@@ -2653,6 +2691,8 @@ void PerformSecondaryAction()
 	if (pcursitem != -1) {
 		NetSendCmdLocParam1(true, CMD_GOTOAGETITEM, cursPosition, pcursitem);
 	} else if (ObjectUnderCursor != nullptr) {
+		if (!ConfirmOperateObject(*ObjectUnderCursor))
+			return;
 		NetSendCmdLoc(MyPlayerId, true, CMD_OPOBJXY, cursPosition);
 		LastPlayerAction = PlayerActionType::OperateObject;
 	} else {

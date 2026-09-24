@@ -167,6 +167,7 @@ set(libdevilutionx_SRCS
   utils/language.cpp
   utils/navigation_speech.cpp
   utils/proximity_audio.cpp
+  utils/quest_spots.cpp
   utils/sdl_bilinear_scale.cpp
   utils/sdl_thread.cpp
   utils/surface_to_clx.cpp

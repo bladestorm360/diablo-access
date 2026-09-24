@@ -59,6 +59,7 @@
 #include "utils/endian_swap.hpp"
 #include "utils/is_of.hpp"
 #include "utils/language.h"
+#include "utils/screen_reader.hpp"
 #include "utils/str_cat.hpp"
 #include "utils/str_split.hpp"
 #include "utils/utf8.hpp"
@@ -2553,6 +2554,8 @@ size_t OnNakrul(const TCmd &cmd)
 		if (currlevel == 24) {
 			PlaySfxLoc(SfxID::CryptDoorOpen, { UberRow, UberCol });
 			SyncNakrulRoom();
+			// The last spellbook shows no text, so this is the only sign the order was right.
+			SpeakText(_("Na-Krul's chamber opens. Na-Krul is weakened."), /*force=*/true);
 		}
 		IsUberRoomOpened = true;
 		Quests[Q_NAKRUL]._qactive = QUEST_DONE;

@@ -50,6 +50,7 @@
 #include "utils/is_of.hpp"
 #include "utils/language.h"
 #include "utils/log.hpp"
+#include "utils/screen_reader.hpp"
 #include "utils/str_cat.hpp"
 
 namespace devilution {
@@ -1834,6 +1835,8 @@ void OperateLever(Object &object, bool sendmsg)
 		PlaySfxLoc(SfxID::CryptDoorOpen, { UberRow, UberCol });
 		Quests[Q_NAKRUL]._qactive = QUEST_DONE;
 		NetSendCmdQuest(true, Quests[Q_NAKRUL]);
+		if (!IsUberRoomOpened)
+			SpeakText(_("Na-Krul's chamber opens. Na-Krul is at full strength."), /*force=*/true);
 	}
 
 	if (sendmsg)

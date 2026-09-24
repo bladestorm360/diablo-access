@@ -340,7 +340,7 @@ std::string TriggerLabelForSpeech(const TriggerStruct &trigger)
 			return fmt::format(fmt::runtime(_("Town warp to level {:d}")), trigger._tlvl);
 		}
 	case WM_DIABTWARPUP:
-		return std::string { _("Warp up") };
+		return std::string { _("Up to town") };
 	case WM_DIABRETOWN:
 		return std::string { _("Return to town") };
 	case WM_DIABWARPLVL:
