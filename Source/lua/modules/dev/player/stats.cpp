@@ -1,4 +1,4 @@
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "lua/modules/dev/player/stats.hpp"
 
 #include <string>
@@ -97,4 +97,4 @@ sol::table LuaDevPlayerStatsModule(sol::state_view &lua)
 }
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

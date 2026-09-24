@@ -77,7 +77,7 @@
 #include "controls/touch/renderers.h"
 #endif
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 
@@ -525,7 +525,7 @@ void DrawCell(const Surface &out, const Lightmap lightmap, Point tilePosition, P
 
 	const uint8_t *tbl = LightTables[lightTableIndex].data();
 	const uint8_t *foliageTbl = tbl;
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	int walkpathIdx = -1;
 	Point originalTargetBufferPosition;
 	if (DebugPath) {
@@ -631,7 +631,7 @@ void DrawCell(const Surface &out, const Lightmap lightmap, Point tilePosition, P
 		targetBufferPosition.y -= TILE_HEIGHT;
 	}
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugPath && walkpathIdx != -1) {
 		DrawString(out, StrCat(walkpathIdx),
 		    Rectangle(originalTargetBufferPosition + Displacement { 0, -TILE_HEIGHT }, Size { TILE_WIDTH, TILE_HEIGHT }),
@@ -654,7 +654,7 @@ void DrawFloorTile(const Surface &out, const Lightmap &lightmap, Point tilePosit
 	const int lightTableIndex = dLight[tilePosition.x][tilePosition.y];
 
 	const uint8_t *tbl = LightTables[lightTableIndex].data();
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugPath && MyPlayer->GetPositionPathIndex(tilePosition) != -1)
 		tbl = GetPauseTRN();
 #endif
@@ -760,7 +760,7 @@ void DrawDungeon(const Surface &out, const Lightmap &lightmap, Point tilePositio
 	const int8_t bDead = dCorpse[tilePosition.x][tilePosition.y];
 	const int8_t bMap = dTransVal[tilePosition.x][tilePosition.y];
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugVision && IsTileLit(tilePosition)) {
 		ClxDraw(out, targetBufferPosition, (*pSquareCel)[0]);
 	}
@@ -966,7 +966,7 @@ void DrawTileContent(const Surface &out, const Lightmap &lightmap, Point tilePos
 	// Keep evaluating until MicroTiles can't affect screen
 	rows += MicroTileLen;
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	DebugCoordsMap.reserve(rows * columns);
 #endif
 
@@ -975,7 +975,7 @@ void DrawTileContent(const Surface &out, const Lightmap &lightmap, Point tilePos
 		for (int j = 0; j < columns; j++) {
 			if (InDungeonBounds(tilePosition)) {
 				bool skipNext = false;
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 				DebugCoordsMap[tilePosition.x + tilePosition.y * MAXDUNX] = targetBufferPosition;
 #endif
 				if (tilePosition.x + 1 < MAXDUNX && tilePosition.y - 1 >= 0 && targetBufferPosition.x + TILE_WIDTH <= gnScreenWidth) {
@@ -1284,7 +1284,7 @@ void DrawGame(const Surface &fullOut, Point position, Displacement offset)
  */
 void DrawView(const Surface &out, Point startPosition)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	DebugCoordsMap.clear();
 #endif
 	Displacement offset = {};
@@ -1293,7 +1293,7 @@ void DrawView(const Surface &out, Point startPosition)
 	if (AutomapActive) {
 		DrawAutomap(out.subregionY(0, gnViewportHeight));
 	}
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	bool debugGridTextNeeded = IsDebugGridTextNeeded();
 	if (debugGridTextNeeded || DebugGrid) {
 		// force redrawing or debug stuff stays on panel on 640x480 resolution
@@ -1712,7 +1712,7 @@ void ClearScreenBuffer()
 	SDL_FillSurfaceRect(PalSurface, nullptr, 0);
 }
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 void ScrollView()
 {
 	if (!MyPlayer->HoldItem.isEmpty())
@@ -1877,7 +1877,7 @@ void DrawAndBlit()
 
 	DrawMain(hgt, drawInfoBox, drawHealth, drawMana, drawBelt, drawControlButtons);
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	DrawConsole(out);
 #endif
 

@@ -48,7 +48,7 @@ extern DVL_API_FOR_TEST uint8_t *FullyDarkLightTable;
 extern std::array<uint8_t, 256> InfravisionTable;
 extern std::array<uint8_t, 256> StoneTable;
 extern std::array<uint8_t, 256> PauseTable;
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 extern bool DisableLighting;
 #endif
 extern bool UpdateLighting;
@@ -59,7 +59,7 @@ void DoUnVision(Point position, uint8_t radius);
 void DoVision(Point position, uint8_t radius, MapExplorationType doAutomap, bool visible);
 tl::expected<void, std::string> LoadTrns();
 void MakeLightTable();
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 void ToggleLighting();
 #endif
 void InitLighting();

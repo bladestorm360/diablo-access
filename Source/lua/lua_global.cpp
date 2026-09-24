@@ -31,7 +31,7 @@
 #include "utils/log.hpp"
 #include "utils/str_cat.hpp"
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "lua/modules/dev.hpp"
 #include "lua/repl.hpp"
 #endif
@@ -171,7 +171,7 @@ sol::environment CreateLuaSandbox()
 	sandbox.set(
 	    "print", LuaPrint,
 	    "_DEBUG",
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	    true,
 #else
 	    false,
@@ -185,7 +185,7 @@ sol::environment CreateLuaSandbox()
 	         "select", "tonumber", "tostring", "type", "xpcall",
 	         "rawequal", "rawget", "rawset", "setmetatable",
 	// Built-in packages:
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	         "debug",
 #endif
 	         "base", "coroutine", "table", "string", "math", "utf8" }) {
@@ -277,7 +277,7 @@ void LuaInitialize()
 	SafeCallResult(lua.safe_script(RequireGenSrc), /*optional=*/false);
 
 	CurrentLuaState->commonPackages = lua.create_table_with(
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	    "devilutionx.dev", LuaDevModule(lua),
 #endif
 	    "devilutionx.version", PROJECT_VERSION,
@@ -308,7 +308,7 @@ void LuaInitialize()
 
 void LuaShutdown()
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	LuaReplShutdown();
 #endif
 	CurrentLuaState = std::nullopt;

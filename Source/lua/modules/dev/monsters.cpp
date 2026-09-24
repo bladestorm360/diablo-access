@@ -1,4 +1,4 @@
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "lua/modules/dev/monsters.hpp"
 
 #include <optional>
@@ -178,4 +178,4 @@ sol::table LuaDevMonstersModule(sol::state_view &lua)
 }
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

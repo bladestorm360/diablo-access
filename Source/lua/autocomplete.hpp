@@ -1,5 +1,5 @@
 #pragma once
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -41,4 +41,4 @@ struct hash<devilution::LuaAutocompleteSuggestion> {
 };
 } // namespace std
 
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

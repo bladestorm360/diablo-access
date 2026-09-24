@@ -61,7 +61,7 @@ std::unordered_map<_talker_id, const TownerData *> TownerBehaviors;
  */
 void InitTownerFromData(Towner &towner, const TownerDataEntry &entry);
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 /**
  * @brief Finds the towner data entry from TSV for a given type.
  */
@@ -852,7 +852,7 @@ void UpdateCowFarmerAnimAfterQuestComplete()
 	cowFarmer->_tAnimFrame = std::min<uint8_t>(curFrame, cowFarmer->_tAnimLen - 1);
 }
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 bool DebugTalkToTowner(_talker_id type)
 {
 	if (!IsTownerPresent(type))

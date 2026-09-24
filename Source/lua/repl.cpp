@@ -1,4 +1,4 @@
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "lua/repl.hpp"
 
 #include <cstddef>
@@ -108,4 +108,4 @@ void LuaReplShutdown()
 }
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

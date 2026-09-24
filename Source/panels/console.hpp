@@ -1,4 +1,4 @@
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #pragma once
 
 #include <string_view>
@@ -23,4 +23,4 @@ void PrintToConsole(std::string_view text);
 void PrintWarningToConsole(std::string_view text);
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

@@ -1,4 +1,4 @@
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "lua/modules/dev.hpp"
 
 #include <sol/sol.hpp>
@@ -30,4 +30,4 @@ sol::table LuaDevModule(sol::state_view &lua)
 }
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

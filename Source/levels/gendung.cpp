@@ -367,7 +367,7 @@ void InitGlobals()
 	memset(dObject, 0, sizeof(dObject));
 	memset(dSpecial, 0, sizeof(dSpecial));
 	uint8_t defaultLight = leveltype == DTYPE_TOWN ? 0 : 15;
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DisableLighting)
 		defaultLight = 0;
 #endif

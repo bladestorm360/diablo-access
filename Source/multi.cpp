@@ -347,7 +347,7 @@ void BeginTimeout()
 	if (!sgbTimeout) {
 		return;
 	}
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugDisableNetworkTimeout) {
 		return;
 	}

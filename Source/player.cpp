@@ -21,7 +21,7 @@
 #include "controls/plrctrls.h"
 #include "cursor.h"
 #include "dead.h"
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 #include "engine/backbuffer_state.hpp"
@@ -553,7 +553,7 @@ bool PlrHitMonst(Player &player, Monster &monster, bool adjacentDamage = false)
 		return true;
 
 	if (hit >= hper) {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		if (!DebugGodMode)
 #endif
 			return false;
@@ -636,7 +636,7 @@ bool PlrHitMonst(Player &player, Monster &monster, bool adjacentDamage = false)
 			}
 			dam *= 2;
 		}
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		if (DebugGodMode) {
 			dam = monster.hitPoints; /* ensure monster is killed with one hit */
 		}

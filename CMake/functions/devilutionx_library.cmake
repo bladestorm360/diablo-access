@@ -14,6 +14,8 @@ function(add_devilutionx_library NAME)
 
   genex_for_option(DEBUG)
   target_compile_definitions(${NAME} PUBLIC "$<${DEBUG_GENEX}:_DEBUG>")
+  genex_for_option(DEV_TOOLS)
+  target_compile_definitions(${NAME} PUBLIC "$<$<OR:${DEBUG_GENEX},${DEV_TOOLS_GENEX}>:DEVILUTIONX_DEV_TOOLS>")
 
   if(NOT NONET AND NOT DISABLE_TCP)
     target_compile_definitions(${NAME} PUBLIC ASIO_STANDALONE)

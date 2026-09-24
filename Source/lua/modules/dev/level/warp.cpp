@@ -1,4 +1,4 @@
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "lua/modules/dev/level/warp.hpp"
 
 #include <cstdint>
@@ -79,4 +79,4 @@ sol::table LuaDevLevelWarpModule(sol::state_view &lua)
 }
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

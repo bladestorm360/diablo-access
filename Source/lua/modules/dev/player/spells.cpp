@@ -1,4 +1,4 @@
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "lua/modules/dev/player/spells.hpp"
 
 #include <cstdint>
@@ -36,4 +36,4 @@ sol::table LuaDevPlayerSpellsModule(sol::state_view &lua)
 }
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

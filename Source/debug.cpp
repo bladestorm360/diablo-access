@@ -4,7 +4,7 @@
  * Implementation of debug functions.
  */
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 
 #include <cmath>
 #include <cstdint>

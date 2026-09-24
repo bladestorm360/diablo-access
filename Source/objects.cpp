@@ -18,7 +18,7 @@
 #include "DiabloUI/ui_flags.hpp"
 #include "automap.h"
 #include "cursor.h"
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 #include "diablo_msg.hpp"
@@ -1453,7 +1453,7 @@ void AddMushPatch()
 
 bool IsLightVisible(Object &light, int lightRadius)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DisableLighting)
 		return false;
 #endif

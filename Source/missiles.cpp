@@ -51,7 +51,7 @@
 #include "tables/playerdat.hpp"
 #include "tables/spelldat.h"
 #include "utils/enum_traits.h"
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 #include "engine/backbuffer_state.hpp"
@@ -299,7 +299,7 @@ bool MonsterMHit(const Player &player, Monster &monster, int mindam, int maxdam,
 		return true;
 
 	if (hit >= hper) {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		if (!DebugGodMode)
 #endif
 			return false;
@@ -1036,7 +1036,7 @@ bool MonsterTrapHit(Monster &monster, int mindam, int maxdam, int dist, MissileI
 	if (monster.tryLiftGargoyle())
 		return true;
 	if (hit >= hper && monster.mode != MonsterMode::Petrified) {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		if (!DebugGodMode)
 #endif
 			return false;
@@ -1049,7 +1049,7 @@ bool MonsterTrapHit(Monster &monster, int mindam, int maxdam, int dist, MissileI
 	if (resist)
 		dam /= 4;
 	ApplyMonsterDamage(damageType, monster, dam);
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugGodMode)
 		monster.hitPoints = 0;
 #endif
@@ -1082,7 +1082,7 @@ bool PlayerMHit(Player &player, Monster *monster, int dist, int mind, int maxd, 
 	}
 
 	int hit = GenerateRnd(100);
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugGodMode)
 		hit = 1000;
 #endif

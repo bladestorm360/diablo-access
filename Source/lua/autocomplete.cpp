@@ -1,4 +1,4 @@
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "lua/autocomplete.hpp"
 
 #include <algorithm>
@@ -293,4 +293,4 @@ void GetLuaAutocompleteSuggestions(std::string_view text, size_t cursorPos, cons
 }
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

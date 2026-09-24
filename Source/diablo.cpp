@@ -34,7 +34,7 @@
 #include "control/control.hpp"
 #include "cursor.h"
 #include "dead.h"
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 #include "DiabloUI/diabloui.h"
@@ -157,7 +157,7 @@ clicktype sgbMouseDown;
 uint16_t gnTickDelay = 50;
 char gszProductName[64] = "DevilutionX vUnknown";
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 bool DebugDisableNetworkTimeout = false;
 std::vector<std::string> DebugCmdsFromCommandLine;
 #endif
@@ -192,7 +192,7 @@ void StartGame(interface_mode uMsg)
 	CalcViewportGeometry();
 	cineflag = false;
 	InitCursor();
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	LoadDebugGFX();
 #endif
 	assert(HeadlessMode || ghMainWnd);
@@ -222,7 +222,7 @@ void FreeGame()
 		ResetPlayerGFX(player);
 
 	FreeCursor();
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	FreeDebugGFX();
 #endif
 	FreeGameMem();
@@ -855,7 +855,7 @@ void GameEventHandler(const SDL_Event &event, uint16_t modState)
 		return;
 	}
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (ConsoleHandleEvent(event)) {
 		return;
 	}
@@ -988,7 +988,7 @@ void RunGameLoop(interface_mode uMsg)
 
 	while (gbRunGame) {
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		if (!gbGameLoopStartup && !DebugCmdsFromCommandLine.empty()) {
 			InitConsole();
 			for (const std::string &cmd : DebugCmdsFromCommandLine) {
@@ -1130,7 +1130,7 @@ extern "C" void SdlLogToFile(void *userdata, int category, SDL_LogPriority prior
 	PrintHelpOption("--hellfire", _(/* TRANSLATORS: Commandline Option */ "Force Hellfire mode"));
 	printInConsole(_(/* TRANSLATORS: Commandline Option */ "Hellfire options:"));
 	printNewlineInConsole();
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	printNewlineInConsole();
 	printInConsole("Debug options:");
 	printNewlineInConsole();
@@ -1157,7 +1157,7 @@ void PrintFlagRequiresArgument(std::string_view flag)
 
 void DiabloParseFlags(int argc, char **argv)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	int argumentIndexOfLastCommandPart = -1;
 	std::string currentCommand;
 #endif
@@ -1262,7 +1262,7 @@ void DiabloParseFlags(int argc, char **argv)
 			}
 			SDL_SetLogOutputFunction(&SdlLogToFile, /*userdata=*/SdlLogFile);
 #endif
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		} else if (arg == "-i") {
 			DebugDisableNetworkTimeout = true;
 		} else if (arg[0] == '+') {
@@ -1284,7 +1284,7 @@ void DiabloParseFlags(int argc, char **argv)
 		}
 	}
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (!currentCommand.empty())
 		DebugCmdsFromCommandLine.push_back(currentCommand);
 #endif
@@ -1626,7 +1626,7 @@ void GameLogic()
 	}
 	if (leveltype != DTYPE_TOWN) {
 		gGameLogicStep = GameLogicStep::ProcessMonsters;
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		if (!DebugInvisible)
 #endif
 			ProcessMonsters();
@@ -1656,7 +1656,7 @@ void GameLogic()
 
 	gGameLogicStep = GameLogicStep::None;
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugScrollViewEnabled && (SDL_GetModState() & SDL_KMOD_SHIFT) != 0) {
 		ScrollView();
 	}
@@ -2224,13 +2224,16 @@ void InitKeymapActions()
 	    [] {
 		    ReorganizeInventory(*MyPlayer);
 	    });
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	options.Keymapper.AddAction(
 	    "OpenConsole",
 	    N_("Console"),
 	    N_("Opens Lua console."),
 	    SDLK_GRAVE,
 	    OpenConsole);
+#endif
+#ifdef _DEBUG
+	// 'X' also speaks the experience remaining, so this stays out of dev-tools release builds.
 	options.Keymapper.AddAction(
 	    "DebugToggle",
 	    "Debug toggle",
@@ -3231,7 +3234,7 @@ tl::expected<void, std::string> LoadGameLevelDungeon(bool firstflag, lvl_entry l
 		[[maybe_unused]] const uint32_t mid3Seed = GetLCGEngineState();
 		InitMissiles();
 		InitCorpses();
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		SetDebugLevelSeedInfos(mid1Seed, mid2Seed, mid3Seed, GetLCGEngineState());
 #endif
 		SavePreLighting();

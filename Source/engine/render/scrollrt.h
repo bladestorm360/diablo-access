@@ -67,7 +67,7 @@ Point GetScreenPosition(Point tile);
  * @brief Render the whole screen black
  */
 void ClearScreenBuffer();
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 
 /**
  * @brief Scroll the screen when mouse is close to the edge

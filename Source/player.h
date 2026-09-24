@@ -952,7 +952,7 @@ void NewPlrAnim(Player &player, player_graphic graphic, Direction dir, Animation
 void SetPlrAnims(Player &player);
 void CreatePlayer(Player &player, HeroClass c);
 int CalcStatDiff(Player &player);
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 void NextPlrLevel(Player &player);
 #endif
 void AddPlrMonstExper(int lvl, unsigned int exp, char pmask);

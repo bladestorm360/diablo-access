@@ -102,7 +102,7 @@
 #include "utils/status_macros.hpp"
 #include "utils/str_cat.hpp"
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 
@@ -1173,7 +1173,7 @@ void MonsterAttackPlayer(Monster &monster, Player &player, int hit, int minDam, 
 		return;
 
 	int hper = GenerateRnd(100);
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugGodMode)
 		hper = 1000;
 #endif
@@ -4340,7 +4340,7 @@ bool LineClear(tl::function_ref<bool(Point)> clear, Point startPoint, Point endP
 
 tl::expected<void, std::string> SyncMonsterAnim(Monster &monster)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	// fix for saves with debug monsters having type originally not on the level
 	CMonster &monsterType = LevelMonsterTypes[monster.levelType];
 	if (monsterType.corpseId == 0) {

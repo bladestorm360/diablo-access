@@ -109,7 +109,7 @@ void TalkToTowner(Player &player, int t);
 void UpdateGirlAnimAfterQuestComplete();
 void UpdateCowFarmerAnimAfterQuestComplete();
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 bool DebugTalkToTowner(_talker_id type);
 #endif
 

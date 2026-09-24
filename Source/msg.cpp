@@ -2489,7 +2489,7 @@ size_t OnSyncQuest(const TCmdQuest &message, Player &player)
 
 size_t OnCheatExperience(const TCmd &cmd, Player &player) // NOLINT(misc-unused-parameters)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (gbBufferMsgs == 1)
 		BufferMessage(player, &cmd, sizeof(cmd));
 	else if (!player.isMaxCharacterLevel()) {

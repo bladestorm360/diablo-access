@@ -41,7 +41,7 @@ uint8_t *FullyDarkLightTable = nullptr;
 std::array<uint8_t, 256> InfravisionTable;
 std::array<uint8_t, 256> StoneTable;
 std::array<uint8_t, 256> PauseTable;
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 bool DisableLighting;
 #endif
 bool UpdateLighting;
@@ -327,7 +327,7 @@ void MakeLightTable()
 	}
 }
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 void ToggleLighting()
 {
 	DisableLighting = !DisableLighting;
@@ -351,7 +351,7 @@ void InitLighting()
 	ActiveLightCount = 0;
 	UpdateLighting = false;
 	UpdateVision = false;
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	DisableLighting = false;
 #endif
 
@@ -362,7 +362,7 @@ void InitLighting()
 
 int AddLight(Point position, uint8_t radius)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DisableLighting)
 		return NO_LIGHT;
 #endif
@@ -384,7 +384,7 @@ int AddLight(Point position, uint8_t radius)
 
 void AddUnLight(int i)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DisableLighting)
 		return;
 #endif
@@ -398,7 +398,7 @@ void AddUnLight(int i)
 
 void ChangeLightRadius(int i, uint8_t radius)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DisableLighting)
 		return;
 #endif
@@ -416,7 +416,7 @@ void ChangeLightRadius(int i, uint8_t radius)
 
 void ChangeLightXY(int i, Point position)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DisableLighting)
 		return;
 #endif
@@ -434,7 +434,7 @@ void ChangeLightXY(int i, Point position)
 
 void ChangeLightOffset(int i, DisplacementOf<int8_t> offset)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DisableLighting)
 		return;
 #endif
@@ -455,7 +455,7 @@ void ChangeLightOffset(int i, DisplacementOf<int8_t> offset)
 
 void ChangeLight(int i, Point position, uint8_t radius)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DisableLighting)
 		return;
 #endif
@@ -474,7 +474,7 @@ void ChangeLight(int i, Point position, uint8_t radius)
 
 void ProcessLightList()
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DisableLighting)
 		return;
 #endif

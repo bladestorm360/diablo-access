@@ -38,7 +38,7 @@
 #include "utils/str_cat.hpp"
 #include "utils/utf8.hpp"
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 
@@ -479,7 +479,7 @@ int GetMapReturnLevel()
 
 Point GetMapReturnPosition()
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (!TestMapPath.empty())
 		return ViewPosition;
 #endif

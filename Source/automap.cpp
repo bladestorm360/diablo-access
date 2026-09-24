@@ -26,7 +26,7 @@
 #include "utils/ui_fwd.h"
 #include "utils/utf8.hpp"
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #include "lighting.h"
 #endif
@@ -1001,7 +1001,7 @@ void DrawAutomapTile(const Surface &out, Point center, Point map)
 	AutomapTile nwTile = GetAutomapTypeView(map + Direction::NorthWest);
 	AutomapTile neTile = GetAutomapTypeView(map + Direction::NorthEast);
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugVision) {
 		if (IsTileLit(map.megaToWorld()))
 			DrawDiamond(out, center, PAL8_ORANGE + 1);
@@ -1480,7 +1480,7 @@ void DrawAutomapText(const Surface &out)
 	const std::string description = fmt::format(fmt::runtime(_(/* TRANSLATORS: {:s} means: Game Difficulty. */ "Difficulty: {:s}")), difficulty);
 	drawStringAndAdvanceLine(description);
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugGodMode || DebugInvisible || DisableLighting || DebugVision || DebugPath || DebugGrid || DebugScrollViewEnabled) {
 		const TextRenderOptions disabled {
 			.flags = UiFlags::ColorBlack,
@@ -1849,7 +1849,7 @@ void DrawAutomap(const Surface &out)
 
 	if (AutoMapShowItems)
 		SearchAutomapItem(out, myPlayerOffset, 8, [](Point position) { return dItem[position.x][position.y] != 0; });
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (IsDebugAutomapHighlightNeeded())
 		SearchAutomapItem(out, myPlayerOffset, std::max(MAXDUNX, MAXDUNY), ShouldHighlightDebugAutomapTile);
 #endif

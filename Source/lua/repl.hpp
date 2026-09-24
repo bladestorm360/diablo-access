@@ -1,5 +1,5 @@
 #pragma once
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 
 #include <string>
 #include <string_view>
@@ -16,4 +16,4 @@ sol::environment &GetLuaReplEnvironment();
 void LuaReplShutdown();
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS

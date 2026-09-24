@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 #include "engine/load_file.hpp"
@@ -161,7 +161,7 @@ void LoadSetMap()
 		LoadArenaMap("arena\\circle_of_death.dun", { 30, 26 }, { 29, 26 });
 		break;
 	case SL_NONE:
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		LoadCustomMap(TestMapPath.c_str(), ViewPosition);
 		InitNoTriggers();
 #endif

@@ -4,7 +4,7 @@
 
 #include <fmt/format.h>
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 #include "engine/load_file.hpp"
@@ -36,7 +36,7 @@ std::optional<std::array<uint8_t, 256>> GetClassTRN(Player &player)
 	const PlayerSpriteData &spriteData = GetPlayerSpriteDataForClass(player._pClass);
 	*BufCopy(path, "plrgfx\\", spriteData.trn, ".trn") = '\0';
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (!debugTRN.empty()) {
 		*BufCopy(path, debugTRN.c_str()) = '\0';
 	}

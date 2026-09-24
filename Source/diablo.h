@@ -18,7 +18,7 @@
 #endif
 #endif
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "tables/monstdat.h"
 #endif
 #include "levels/gendung.h"
@@ -112,7 +112,7 @@ void diablo_color_cyc_logic();
 
 /* rdata */
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 extern bool DebugDisableNetworkTimeout;
 #endif
 

@@ -12,8 +12,9 @@
 #include "utils/str_case.hpp"
 #include "utils/str_cat.hpp"
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
+#include "panels/console.hpp"
 #endif
 
 namespace devilution {
@@ -198,7 +199,7 @@ std::string TextCmdLevelSeed(const std::string_view parameter)
 	return StrCat(
 	    "Seedinfo for ", levelType, " ", currlevel, "\n",
 	    "seed: ", DungeonSeeds[currlevel], "\n",
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	    "Mid1: ", glMid1Seed[currlevel], "\n",
 	    "Mid2: ", glMid2Seed[currlevel], "\n",
 	    "Mid3: ", glMid3Seed[currlevel], "\n",
@@ -245,6 +246,18 @@ std::string TextCmdPing(const std::string_view parameter)
 	return ret;
 }
 
+#ifdef DEVILUTIONX_DEV_TOOLS
+std::string TextCmdLua(const std::string_view parameter)
+{
+	if (parameter.empty())
+		return StrCat(_("Type Lua after the command, for example:"), " /lua dev.level.warp.dungeon(17)");
+
+	InitConsole();
+	RunInConsole(parameter); // The console speaks the result.
+	return "";
+}
+#endif
+
 std::vector<TextCmdItem> TextCmdList = {
 	{ "/help", N_("Prints help overview or help for a specific command."), N_("[command]"), &TextCmdHelp },
 	{ "/arena", N_("Enter a PvP Arena."), N_("<arena-number>"), &TextCmdArena },
@@ -252,6 +265,9 @@ std::vector<TextCmdItem> TextCmdList = {
 	{ "/inspect", N_("Inspects stats and equipment of another player."), N_("<player name>"), &TextCmdInspect },
 	{ "/seedinfo", N_("Show seed infos for current level."), "", &TextCmdLevelSeed },
 	{ "/ping", N_("Show latency statistics for another player."), N_("<player name>"), &TextCmdPing },
+#ifdef DEVILUTIONX_DEV_TOOLS
+	{ "/lua", N_("Runs Lua in the dev console, such as dev.level.warp.dungeon(17)."), N_("<code>"), &TextCmdLua },
+#endif
 };
 
 } // namespace

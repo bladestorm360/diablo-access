@@ -7,7 +7,7 @@
 
 #include "control/control.hpp"
 #include "cursor.h"
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "debug.h"
 #endif
 #include "engine/backbuffer_state.hpp"
@@ -157,7 +157,7 @@ void ConsumeSpell(Player &player, SpellID sn)
 		ConsumeStaffCharge(player);
 		break;
 	case SpellType::Spell:
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		if (DebugGodMode)
 			break;
 #endif
@@ -184,7 +184,7 @@ void EnsureValidReadiedSpell(Player &player)
 
 SpellCheckResult CheckSpell(const Player &player, SpellID sn, SpellType st, bool manaonly)
 {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	if (DebugGodMode)
 		return SpellCheckResult::Success;
 #endif
