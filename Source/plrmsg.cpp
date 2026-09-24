@@ -25,6 +25,7 @@
 #include "qol/stash.h"
 #include "utils/algorithm/container.hpp"
 #include "utils/language.h"
+#include "utils/screen_reader.hpp"
 #include "utils/utf8.hpp"
 
 namespace devilution {
@@ -76,6 +77,7 @@ void EventPlrMsg(std::string_view text, UiFlags style)
 	message.prefixLength = 0;
 	message.lineHeight = GetLineHeight(message.text, GameFont12) + 3;
 	AddMessageToChatLog(text);
+	SpeakText(message.text, /*force=*/true);
 }
 
 void SendPlrMsg(Player &player, std::string_view text)
@@ -90,6 +92,7 @@ void SendPlrMsg(Player &player, std::string_view text)
 	message.prefixLength = from.size();
 	message.lineHeight = GetLineHeight(message.text, GameFont12) + 3;
 	AddMessageToChatLog(text, &player);
+	SpeakText(message.text, /*force=*/true);
 }
 
 void InitPlrMsg()

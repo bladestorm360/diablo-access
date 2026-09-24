@@ -10,8 +10,11 @@
 #include "panels/mainpanel.hpp"
 #include "quick_messages.hpp"
 #include "utils/display.h"
+#include "utils/language.h"
+#include "utils/screen_reader.hpp"
 #include "utils/sdl_compat.h"
 #include "utils/str_cat.hpp"
+#include "utils/text_input_speech.hpp"
 
 namespace devilution {
 
@@ -50,6 +53,8 @@ void ResetChatMessage()
 
 void ControlPressEnter()
 {
+	if (TalkMessage[0] == 0)
+		SpeakText(_("Chat closed."), /*force=*/true);
 	if (TalkMessage[0] != 0) {
 		ResetChatMessage();
 		uint8_t i = 0;
@@ -81,9 +86,11 @@ void ControlUpDown(int v)
 		TalkSaveIndex = (v + TalkSaveIndex) & 7;
 		if (TalkSave[TalkSaveIndex][0] != 0) {
 			ChatInputState->assign(TalkSave[TalkSaveIndex]);
+			SpeakText(TalkSave[TalkSaveIndex], /*force=*/true);
 			return;
 		}
 	}
+	SpeakText(_("No earlier messages."), /*force=*/true);
 }
 
 } // namespace
@@ -94,18 +101,22 @@ void DrawChatBox(const Surface &out)
 		return;
 
 	const Point mainPanelPosition = GetMainPanel().position;
+	// The talk panel graphics live in the part of BottomBuffer that only multiplayer allocates.
+	const bool drawTalkPanel = IsChatAvailable();
 
-	DrawPanelBox(out, MakeSdlRect(175, sgbPlrTalkTbl + 20, 294, 5), mainPanelPosition + Displacement { 175, 4 });
-	int off = 0;
-	for (int i = 293; i > 283; off++, i--) {
-		DrawPanelBox(out, MakeSdlRect((off / 2) + 175, sgbPlrTalkTbl + off + 25, i, 1), mainPanelPosition + Displacement { (off / 2) + 175, off + 9 });
+	if (drawTalkPanel) {
+		DrawPanelBox(out, MakeSdlRect(175, sgbPlrTalkTbl + 20, 294, 5), mainPanelPosition + Displacement { 175, 4 });
+		int off = 0;
+		for (int i = 293; i > 283; off++, i--) {
+			DrawPanelBox(out, MakeSdlRect((off / 2) + 175, sgbPlrTalkTbl + off + 25, i, 1), mainPanelPosition + Displacement { (off / 2) + 175, off + 9 });
+		}
+		DrawPanelBox(out, MakeSdlRect(185, sgbPlrTalkTbl + 35, 274, 30), mainPanelPosition + Displacement { 185, 19 });
+		DrawPanelBox(out, MakeSdlRect(180, sgbPlrTalkTbl + 65, 284, 5), mainPanelPosition + Displacement { 180, 49 });
+		for (int i = 0; i < 10; i++) {
+			DrawPanelBox(out, MakeSdlRect(180, sgbPlrTalkTbl + i + 70, i + 284, 1), mainPanelPosition + Displacement { 180, i + 54 });
+		}
+		DrawPanelBox(out, MakeSdlRect(170, sgbPlrTalkTbl + 80, 310, 55), mainPanelPosition + Displacement { 170, 64 });
 	}
-	DrawPanelBox(out, MakeSdlRect(185, sgbPlrTalkTbl + 35, 274, 30), mainPanelPosition + Displacement { 185, 19 });
-	DrawPanelBox(out, MakeSdlRect(180, sgbPlrTalkTbl + 65, 284, 5), mainPanelPosition + Displacement { 180, 49 });
-	for (int i = 0; i < 10; i++) {
-		DrawPanelBox(out, MakeSdlRect(180, sgbPlrTalkTbl + i + 70, i + 284, 1), mainPanelPosition + Displacement { 180, i + 54 });
-	}
-	DrawPanelBox(out, MakeSdlRect(170, sgbPlrTalkTbl + 80, 310, 55), mainPanelPosition + Displacement { 170, 64 });
 
 	int x = mainPanelPosition.x + 200;
 	const int y = mainPanelPosition.y + 10;
@@ -118,6 +129,9 @@ void DrawChatBox(const Surface &out)
 	        .highlightRange = { static_cast<int>(ChatCursor.selection.begin), static_cast<int>(ChatCursor.selection.end) },
 	    });
 	ChatInputState->truncate(len);
+
+	if (!drawTalkPanel)
+		return;
 
 	x += 46;
 	int talkBtn = 0;
@@ -158,7 +172,7 @@ void DrawChatBox(const Surface &out)
 
 bool CheckMuteButton()
 {
-	if (!ChatFlag)
+	if (!ChatFlag || !IsChatAvailable())
 		return false;
 
 	Rectangle buttons = MuteButtonRect;
@@ -183,7 +197,7 @@ bool CheckMuteButton()
 
 void CheckMuteButtonUp()
 {
-	if (!ChatFlag)
+	if (!ChatFlag || !IsChatAvailable())
 		return;
 
 	for (bool &talkButtonDown : TalkButtonsDown)
@@ -211,9 +225,8 @@ void CheckMuteButtonUp()
 
 void TypeChatMessage()
 {
-	if (!IsChatAvailable())
-		return;
-
+	// Chat also runs /commands, so it opens in single player too. Only the multiplayer talk
+	// panel (whisper buttons) depends on IsChatAvailable().
 	ChatFlag = true;
 	TalkMessage[0] = '\0';
 	ChatInputState.emplace(TextInputState::Options {
@@ -223,13 +236,19 @@ void TypeChatMessage()
 	for (bool &talkButtonDown : TalkButtonsDown) {
 		talkButtonDown = false;
 	}
-	sgbPlrTalkTbl = GetMainPanel().size.height + PanelPaddingHeight;
+	if (IsChatAvailable())
+		sgbPlrTalkTbl = GetMainPanel().size.height + PanelPaddingHeight;
 	RedrawEverything();
 	TalkSaveIndex = NextTalkSave;
 
 	SDL_Rect rect = MakeSdlRect(GetMainPanel().position.x + 200, GetMainPanel().position.y + 22, 0, 27);
 	SDL_SetTextInputArea(ghMainWnd, &rect, /*cursor=*/0);
 	SDLC_StartTextInput(ghMainWnd);
+
+	if (IsChatAvailable())
+		SpeakText(_("Chat. Type a message or a slash command, Enter sends, Escape closes."), /*force=*/true);
+	else
+		SpeakText(_("Command line. Type a slash command such as slash help, Enter runs it, Escape closes."), /*force=*/true);
 }
 
 void ResetChat()
@@ -244,25 +263,18 @@ void ResetChat()
 
 bool IsChatActive()
 {
-	if (!IsChatAvailable())
-		return false;
-
-	if (!ChatFlag)
-		return false;
-
-	return true;
+	return ChatFlag;
 }
 
 bool CheckKeypress(SDL_Keycode vkey)
 {
-	if (!IsChatAvailable())
-		return false;
 	if (!ChatFlag)
 		return false;
 
 	switch (vkey) {
 	case SDLK_ESCAPE:
 		ResetChat();
+		SpeakText(_("Chat closed."), /*force=*/true);
 		return true;
 	case SDLK_RETURN:
 	case SDLK_KP_ENTER:
@@ -283,7 +295,7 @@ void DiabloHotkeyMsg(uint32_t dwMsg)
 {
 	assert(dwMsg < QuickMessages.size());
 
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 	constexpr std::string_view LuaPrefix = "/lua ";
 	for (const std::string &msg : GetOptions().Chat.szHotKeyMsgs[dwMsg]) {
 		if (!msg.starts_with(LuaPrefix)) continue;
@@ -297,7 +309,7 @@ void DiabloHotkeyMsg(uint32_t dwMsg)
 	}
 
 	for (const std::string &msg : GetOptions().Chat.szHotKeyMsgs[dwMsg]) {
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 		if (msg.starts_with(LuaPrefix)) continue;
 #endif
 		char charMsg[MAX_SEND_STR_LEN];
@@ -313,7 +325,9 @@ bool IsChatAvailable()
 
 bool HandleTalkTextInputEvent(const SDL_Event &event)
 {
-	return HandleInputEvent(event, ChatInputState);
+	if (!ChatInputState)
+		return false;
+	return HandleTextInputEventWithSpeech(event, *ChatInputState);
 }
 
 } // namespace devilution

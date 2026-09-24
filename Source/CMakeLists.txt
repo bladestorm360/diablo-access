@@ -170,6 +170,7 @@ set(libdevilutionx_SRCS
   utils/sdl_bilinear_scale.cpp
   utils/sdl_thread.cpp
   utils/surface_to_clx.cpp
+  utils/text_input_speech.cpp
   utils/timer.cpp
   utils/walk_path_speech.cpp)
 

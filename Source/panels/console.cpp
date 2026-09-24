@@ -1,4 +1,4 @@
-#ifdef _DEBUG
+#ifdef DEVILUTIONX_DEV_TOOLS
 #include "panels/console.hpp"
 
 #include <algorithm>
@@ -36,10 +36,13 @@
 #include "lua/repl.hpp"
 #include "utils/algorithm/container.hpp"
 #include "utils/display.h"
+#include "utils/language.h"
+#include "utils/screen_reader.hpp"
 #include "utils/sdl_compat.h"
 #include "utils/sdl_geometry.h"
 #include "utils/str_cat.hpp"
 #include "utils/str_split.hpp"
+#include "utils/text_input_speech.hpp"
 
 namespace devilution {
 
@@ -107,6 +110,11 @@ std::vector<ConsoleLine> ConsoleLines;
 size_t NumPreparedConsoleLines;
 int ConsoleLinesTotalHeight;
 
+// While a line runs, its output is collected and spoken once at the end, because each SpeakText
+// call interrupts the previous one.
+bool IsRunningConsoleLine;
+std::string PendingConsoleSpeech;
+
 // Index of the currently filled input/output, counting from end.
 int HistoryIndex = -1;
 
@@ -145,6 +153,7 @@ void CloseConsole()
 {
 	IsConsoleVisible = false;
 	SDLC_StopTextInput(ghMainWnd);
+	SpeakText(_("Console closed."), /*force=*/true);
 }
 
 int GetConsoleLinesInnerWidth()
@@ -161,6 +170,15 @@ void PrepareForRender(ConsoleLine &consoleLine)
 
 void AddConsoleLine(ConsoleLine &&consoleLine)
 {
+	if (consoleLine.type != ConsoleLine::Input && consoleLine.type != ConsoleLine::Help && !consoleLine.text.empty()) {
+		if (IsRunningConsoleLine) {
+			if (!PendingConsoleSpeech.empty())
+				PendingConsoleSpeech += '\n';
+			PendingConsoleSpeech += consoleLine.text;
+		} else if (IsConsoleVisible) {
+			SpeakText(consoleLine.text, /*force=*/true);
+		}
+	}
 	ConsoleLines.emplace_back(std::move(consoleLine));
 }
 
@@ -335,10 +353,11 @@ void SetHistoryIndex(int index)
 	HistoryIndex = static_cast<int>(std::ssize(ConsoleLines)) - (index + 1);
 	if (HistoryIndex == -1) {
 		ConsoleInputState.assign(DraftInput);
-		return;
+	} else {
+		const ConsoleLine &line = ConsoleLines[index];
+		ConsoleInputState.assign(line.textWithoutPrompt());
 	}
-	const ConsoleLine &line = ConsoleLines[index];
-	ConsoleInputState.assign(line.textWithoutPrompt());
+	SpeakTextInputValue(ConsoleInputState.value());
 }
 
 void PrevHistoryItem(tl::function_ref<bool(const ConsoleLine &line)> filter)
@@ -354,6 +373,7 @@ void PrevHistoryItem(tl::function_ref<bool(const ConsoleLine &line)> filter)
 			return;
 		}
 	}
+	SpeakText(_("No earlier lines."), /*force=*/true);
 }
 
 void NextHistoryItem(tl::function_ref<bool(const ConsoleLine &line)> filter)
@@ -367,7 +387,9 @@ void NextHistoryItem(tl::function_ref<bool(const ConsoleLine &line)> filter)
 	}
 	if (HistoryIndex != -1) {
 		SetHistoryIndex(n);
+		return;
 	}
+	SpeakText(_("No later lines."), /*force=*/true);
 }
 
 bool IsHistoryInputLine(const ConsoleLine &line)
@@ -430,6 +452,16 @@ void ClearConsole()
 	NumPreparedConsoleLines = 0;
 	ConsoleLinesTotalHeight = 0;
 	AddInitialConsoleLines();
+	SpeakText(_("Console cleared."), /*force=*/true);
+}
+
+void SpeakFocusedSuggestion()
+{
+	if (AutocompleteSuggestionFocusIndex < 0 || static_cast<size_t>(AutocompleteSuggestionFocusIndex) >= AutocompleteSuggestions.size())
+		return;
+	SpeakText(StrCat(AutocompleteSuggestions[AutocompleteSuggestionFocusIndex].displayText, ", ",
+	              AutocompleteSuggestionFocusIndex + 1, " ", _("of"), " ", AutocompleteSuggestions.size()),
+	    /*force=*/true);
 }
 
 } // namespace
@@ -443,6 +475,7 @@ void OpenConsole()
 {
 	IsConsoleVisible = true;
 	FirstRender = true;
+	SpeakText(_("Lua console. Enter runs the line, Escape closes. Up and Down recall earlier lines, or move through suggestions when there are some. Tab accepts a suggestion."), /*force=*/true);
 }
 
 void AcceptSuggestion()
@@ -464,7 +497,7 @@ bool ConsoleHandleEvent(const SDL_Event &event)
 		}
 		return false;
 	}
-	if (HandleTextInputEvent(event, ConsoleInputState)) {
+	if (HandleTextInputEventWithSpeech(event, ConsoleInputState)) {
 		CurrentInputTextState = InputTextState::Edited;
 		return true;
 	}
@@ -477,6 +510,7 @@ bool ConsoleHandleEvent(const SDL_Event &event)
 			if (!AutocompleteSuggestions.empty()) {
 				AutocompleteSuggestions.clear();
 				AutocompleteSuggestionFocusIndex = -1;
+				SpeakText(_("Suggestions closed."), /*force=*/true);
 			} else {
 				CloseConsole();
 			}
@@ -485,6 +519,7 @@ bool ConsoleHandleEvent(const SDL_Event &event)
 			if (AutocompleteSuggestionFocusIndex != -1) {
 				AutocompleteSuggestionFocusIndex = std::max(
 				    0, AutocompleteSuggestionFocusIndex - 1);
+				SpeakFocusedSuggestion();
 			} else {
 				isShift ? PrevOutput() : PrevInput();
 			}
@@ -494,6 +529,7 @@ bool ConsoleHandleEvent(const SDL_Event &event)
 				AutocompleteSuggestionFocusIndex = std::min(
 				    static_cast<int>(AutocompleteSuggestions.size()) - 1,
 				    AutocompleteSuggestionFocusIndex + 1);
+				SpeakFocusedSuggestion();
 			} else {
 				isShift ? NextOutput() : NextInput();
 			}
@@ -502,18 +538,20 @@ bool ConsoleHandleEvent(const SDL_Event &event)
 			if (AutocompleteSuggestionFocusIndex != -1) {
 				AcceptSuggestion();
 				CurrentInputTextState = InputTextState::Edited;
+				SpeakTextInputValue(ConsoleInputState.value());
+			} else {
+				SpeakText(_("No suggestions."), /*force=*/true);
 			}
 			return true;
 		case SDLK_RETURN:
 		case SDLK_KP_ENTER:
 			if (isShift) {
 				ConsoleInputState.type("\n");
+				SpeakText(_("new line"), /*force=*/true);
 			} else {
-				if (AutocompleteSuggestionFocusIndex != -1) {
-					AcceptSuggestion();
-				} else {
-					SendInput();
-				}
+				// Always runs the line; only Tab accepts a suggestion. Without sight of the list,
+				// Enter silently completing a word instead of running the line is a trap.
+				SendInput();
 			}
 			CurrentInputTextState = InputTextState::Edited;
 			return true;
@@ -639,6 +677,8 @@ void InitConsole()
 void RunInConsole(std::string_view code)
 {
 	AddConsoleLine(ConsoleLine { .type = ConsoleLine::Input, .text = StrCat(Prompt, code) });
+	IsRunningConsoleLine = true;
+	PendingConsoleSpeech.clear();
 	tl::expected<std::string, std::string> result = RunLuaReplLine(code);
 
 	if (result.has_value()) {
@@ -652,6 +692,13 @@ void RunInConsole(std::string_view code)
 			AddConsoleLine(ConsoleLine { .type = ConsoleLine::Error, .text = "Unknown error" });
 		}
 	}
+
+	IsRunningConsoleLine = false;
+	if (PendingConsoleSpeech.empty())
+		SpeakText(_("Done."), /*force=*/true);
+	else
+		SpeakText(PendingConsoleSpeech, /*force=*/true);
+	PendingConsoleSpeech.clear();
 }
 
 void PrintToConsole(std::string_view text)
@@ -665,4 +712,4 @@ void PrintWarningToConsole(std::string_view text)
 }
 
 } // namespace devilution
-#endif // _DEBUG
+#endif // DEVILUTIONX_DEV_TOOLS
