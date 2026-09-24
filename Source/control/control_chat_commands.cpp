@@ -9,7 +9,6 @@
 #include "utils/algorithm/container.hpp"
 #include "utils/log.hpp"
 #include "utils/parse_int.hpp"
-#include "utils/screen_reader.hpp"
 #include "utils/str_case.hpp"
 #include "utils/str_cat.hpp"
 
@@ -280,9 +279,7 @@ bool CheckChatCommand(const std::string_view text)
 
 	auto textCmdIterator = c_find_if(TextCmdList, [&](const TextCmdItem &elem) { return text.find(elem.text) == 0 && (text.length() == elem.text.length() || text[elem.text.length()] == ' '); });
 	if (textCmdIterator == TextCmdList.end()) {
-		const std::string message = StrCat(_("Command "), "\"", text, "\"", _(" is unknown."));
-		InitDiabloMsg(message);
-		SpeakText(message, /*force=*/true);
+		InitDiabloMsg(StrCat(_("Command "), "\"", text, "\"", _(" is unknown.")));
 		return true;
 	}
 
@@ -291,10 +288,8 @@ bool CheckChatCommand(const std::string_view text)
 	if (text.length() > (textCmd.text.length() + 1))
 		parameter = text.substr(textCmd.text.length() + 1);
 	const std::string result = textCmd.actionProc(parameter);
-	if (result != "") {
+	if (result != "")
 		InitDiabloMsg(result);
-		SpeakText(result, /*force=*/true);
-	}
 	return true;
 }
 

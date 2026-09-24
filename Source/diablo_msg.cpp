@@ -24,6 +24,7 @@
 #include "panels/info_box.hpp"
 #include "utils/algorithm/container.hpp"
 #include "utils/language.h"
+#include "utils/screen_reader.hpp"
 #include "utils/str_split.hpp"
 
 namespace devilution {
@@ -59,6 +60,10 @@ void InitDiabloMsg()
 	msgStartTime = SDL_GetTicks();
 	LineHeight = GetLineHeight(text, GameFont12);
 	OuterHeight = static_cast<int>((TextLines.size()) * LineHeight) + 42;
+
+	// Spoken as each message reaches the screen, so queued messages are read in turn instead of
+	// interrupting each other.
+	SpeakText(text, /*force=*/true);
 }
 
 } // namespace
