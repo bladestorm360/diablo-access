@@ -6,8 +6,11 @@
 #include "inv.h"
 #include "utils/display.h"
 #include "utils/format_int.hpp"
+#include "utils/language.h"
 #include "utils/log.hpp"
+#include "utils/screen_reader.hpp"
 #include "utils/sdl_compat.h"
+#include "utils/text_input_speech.hpp"
 
 namespace devilution {
 
@@ -42,6 +45,18 @@ int GetGoldDropMax()
 	return GoldDropInputState->max();
 }
 
+/// The split gold dialog's question, drawn and spoken.
+std::string GoldSplitQuestion(int max)
+{
+	return fmt::format(
+	    fmt::runtime(ngettext(
+	        /* TRANSLATORS: {:s} is a number with separators. Dialog is shown when splitting a stash of Gold.*/
+	        "You have {:s} gold piece. How many do you want to remove?",
+	        "You have {:s} gold pieces. How many do you want to remove?",
+	        max)),
+	    FormatInteger(max));
+}
+
 } // namespace
 
 void DrawGoldSplit(const Surface &out)
@@ -52,15 +67,7 @@ void DrawGoldSplit(const Surface &out)
 
 	const std::string_view amountText = GoldDropText;
 	const TextInputCursorState &cursor = GoldDropCursor;
-	const int max = GetGoldDropMax();
-
-	const std::string description = fmt::format(
-	    fmt::runtime(ngettext(
-	        /* TRANSLATORS: {:s} is a number with separators. Dialog is shown when splitting a stash of Gold.*/
-	        "You have {:s} gold piece. How many do you want to remove?",
-	        "You have {:s} gold pieces. How many do you want to remove?",
-	        max)),
-	    FormatInteger(max));
+	const std::string description = GoldSplitQuestion(GetGoldDropMax());
 
 	// Pre-wrap the string at spaces, otherwise DrawString would hard wrap in the middle of words
 	const std::string wrapped = WordWrapString(description, 200);
@@ -95,10 +102,14 @@ void control_drop_gold(SDL_Keycode vkey)
 	case SDLK_KP_ENTER:
 		if (const int value = GoldDropInputState->value(); value != 0) {
 			RemoveGold(myPlayer, GoldDropInvIndex, value);
+			SpeakText(fmt::format(fmt::runtime(ngettext("Holding {:s} gold piece.", "Holding {:s} gold pieces.", value)), FormatInteger(value)), /*force=*/true);
+		} else {
+			SpeakText(_("Cancelled."), /*force=*/true);
 		}
 		CloseGoldDrop();
 		break;
 	case SDLK_ESCAPE:
+		SpeakText(_("Cancelled."), /*force=*/true);
 		CloseGoldDrop();
 		break;
 	default:
@@ -121,6 +132,8 @@ void OpenGoldDrop(int8_t invIndex, int max)
 	    .max = max,
 	});
 	SDLC_StartTextInput(ghMainWnd);
+
+	SpeakText(GoldSplitQuestion(max), /*force=*/true);
 }
 
 void CloseGoldDrop()
@@ -135,7 +148,7 @@ void CloseGoldDrop()
 
 bool HandleGoldDropTextInputEvent(const SDL_Event &event)
 {
-	return HandleInputEvent(event, GoldDropInputState);
+	return GoldDropInputState && HandleNumberInputEventWithSpeech(event, *GoldDropInputState);
 }
 
 } // namespace devilution

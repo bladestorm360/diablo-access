@@ -6,12 +6,14 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
 
 #include "engine/point.hpp"
 #include "engine/points_in_rectangle_range.hpp"
+#include "engine/rectangle.hpp"
 #include "items.h"
 
 namespace devilution {
@@ -96,6 +98,30 @@ void WithdrawGoldKeyPress(SDL_Keycode vkey);
 void DrawGoldWithdraw(const Surface &out);
 void CloseGoldWithdraw();
 bool HandleGoldWithdrawTextInputEvent(const SDL_Event &event);
+
+/** @brief The buttons above the stash grid, left to right. */
+enum class StashButton : uint8_t {
+	BackTenPages,
+	PreviousPage,
+	WithdrawGold,
+	NextPage,
+	ForwardTenPages,
+};
+
+/** @brief Where a stash button is on screen. Keyboard focus puts the pointer on it. */
+Rectangle GetStashButtonRect(StashButton button);
+
+/** @brief Does what clicking the button does. */
+void PressStashButton(StashButton button);
+
+/** @brief "Page 2 of 100, 3 items", for speech. */
+std::string StashPageForSpeech();
+
+/** @brief "Gold in stash: 10,000", for speech. The panel shows this total only as a number. */
+std::string StashGoldForSpeech();
+
+/** @brief Speaks gold just put into the stash, and the stash's new total. */
+void SpeakStashGoldDeposit(int amount);
 
 /**
  * @brief Checks whether the given item can be placed on the specified player's stash.

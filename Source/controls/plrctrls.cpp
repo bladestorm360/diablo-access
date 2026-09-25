@@ -4,7 +4,9 @@
 #include <cmath>
 #include <cstdint>
 #include <list>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #ifdef USE_SDL3
 #include <SDL3/SDL_events.h>
@@ -94,6 +96,11 @@ Point ActiveStashSlot = InvalidStashPoint;
 int PreviousInventoryColumn = -1;
 int PreviousBeltColumn = -1;
 bool BeltReturnsToStash = false;
+/**
+ * Keyboard focus is on one of the buttons above the stash grid. ActiveStashSlot keeps the top-row
+ * cell they were reached from, so Down goes back there.
+ */
+std::optional<StashButton> StashButtonFocus;
 
 
 /**
@@ -872,6 +879,62 @@ void SpeakStashSlotForAccessibility()
 	SpeakText(StrCat(positionInfo, _("empty")), /*force=*/true);
 }
 
+[[nodiscard]] std::optional<StashButton> FocusedStashButton()
+{
+	// Moving the real mouse takes the pointer off the button, which ends the focus.
+	if (!StashButtonFocus || !IsStashOpen || !GetStashButtonRect(*StashButtonFocus).contains(MousePosition))
+		return std::nullopt;
+	return StashButtonFocus;
+}
+
+void SpeakStashButton(StashButton button)
+{
+	std::string_view label;
+	switch (button) {
+	case StashButton::BackTenPages:
+		label = _("Back 10 pages.");
+		break;
+	case StashButton::PreviousPage:
+		label = _("Previous page.");
+		break;
+	case StashButton::WithdrawGold:
+		SpeakText(StrCat(_("Withdraw gold."), " ", StashGoldForSpeech()), /*force=*/true);
+		return;
+	case StashButton::NextPage:
+		label = _("Next page.");
+		break;
+	case StashButton::ForwardTenPages:
+		label = _("Forward 10 pages.");
+		break;
+	}
+	SpeakText(StrCat(label, " ", StashPageForSpeech()), /*force=*/true);
+}
+
+void FocusStashButton(StashButton button)
+{
+	StashButtonFocus = button;
+	SetCursorPos(GetStashButtonRect(button).Center());
+	SpeakStashButton(button);
+}
+
+void ActivateStashButton(StashButton button)
+{
+	if (button != StashButton::WithdrawGold) {
+		PressStashButton(button);
+		SpeakText(StashPageForSpeech(), /*force=*/true);
+		return;
+	}
+	if (Stash.gold <= 0) {
+		SpeakText(_("There is no gold in the stash."), /*force=*/true);
+		return;
+	}
+	if (RoomForGold() <= 0) {
+		SpeakText(_("There is no room for gold in your inventory."), /*force=*/true);
+		return;
+	}
+	PressStashButton(button);
+}
+
 /**
  * Get item size (grid size) on the slot specified. Returns 1x1 if none exists.
  */
@@ -1615,6 +1678,21 @@ void StashMove(AxisDirection dir)
 
 	Slot = -1;
 	Size itemSize = holdItem.isEmpty() ? Size { 1, 1 } : GetInventorySize(holdItem);
+	if (const std::optional<StashButton> button = FocusedStashButton()) {
+		if (dir.y != AxisDirectionY_DOWN) {
+			// Left and Right move along the row of buttons, stopping at its ends.
+			if (dir.x == AxisDirectionX_LEFT && *button != StashButton::BackTenPages)
+				FocusStashButton(static_cast<StashButton>(static_cast<uint8_t>(*button) - 1));
+			else if (dir.x == AxisDirectionX_RIGHT && *button != StashButton::ForwardTenPages)
+				FocusStashButton(static_cast<StashButton>(static_cast<uint8_t>(*button) + 1));
+			else
+				SpeakStashButton(*button);
+			return;
+		}
+		// Down lands on the top-row cell the buttons were reached from, without moving further.
+		dir = { AxisDirectionX_NONE, AxisDirectionY_NONE };
+	}
+	StashButtonFocus = std::nullopt;
 	if (ActiveStashSlot == InvalidStashPoint)
 		ActiveStashSlot = FindClosestStashSlot(MousePosition, itemSize);
 
@@ -1652,6 +1730,10 @@ void StashMove(AxisDirection dir)
 					ActiveStashSlot.y--;
 				}
 			}
+		} else {
+			// The stash's buttons sit above the grid. Up always lands on withdraw gold, in their middle.
+			FocusStashButton(StashButton::WithdrawGold);
+			return;
 		}
 	} else if (dir.y == AxisDirectionY_DOWN) {
 		if (ActiveStashSlot.y < 10 - itemSize.height) {
@@ -2242,6 +2324,7 @@ void InvalidateInventorySlot()
 {
 	Slot = -1;
 	ActiveStashSlot = InvalidStashPoint;
+	StashButtonFocus = std::nullopt;
 }
 
 /**
@@ -2260,6 +2343,7 @@ void ToggleStashFocus()
 		return;
 
 	const Item &holdItem = MyPlayer->HoldItem;
+	StashButtonFocus = std::nullopt;
 
 	// Toggle based on cursor location rather than `Slot`, as `Slot` gets invalidated on mouse move in
 	// keyboard+mouse mode (which would otherwise prevent reaching the stash).
@@ -2277,7 +2361,7 @@ void ToggleStashFocus()
 		Point mousePos = GetStashSlotCoord(ActiveStashSlot);
 		mousePos += Displacement { itemSize.width * INV_SLOT_HALF_SIZE_PX, itemSize.height * INV_SLOT_HALF_SIZE_PX };
 		SetCursorPos(mousePos);
-		SpeakText(_("Stash"), /*force=*/true);
+		SpeakText(StrCat(_("Stash"), ", ", StashPageForSpeech()), /*force=*/true);
 		return;
 	}
 
@@ -2446,6 +2530,8 @@ void PerformPrimaryAction()
 				return;
 			TryIconCurs();
 			NewCursor(CURSOR_HAND);
+		} else if (const std::optional<StashButton> button = FocusedStashButton()) {
+			ActivateStashButton(*button);
 		} else if (GetRightPanel().contains(MousePosition) || GetMainPanel().contains(MousePosition)) {
 			LiftInventoryItem();
 		} else if (IsStashOpen && GetLeftPanel().contains(MousePosition)) {
@@ -2656,7 +2742,9 @@ void PerformSecondaryAction()
 			TryIconCurs();
 			NewCursor(CURSOR_HAND);
 		} else if (IsStashOpen) {
-			if (pcursstashitem != StashStruct::EmptyCell) {
+			if (const std::optional<StashButton> button = FocusedStashButton()) {
+				ActivateStashButton(*button);
+			} else if (pcursstashitem != StashStruct::EmptyCell) {
 				TransferItemToInventory(myPlayer, pcursstashitem);
 			} else if (pcursinvitem != -1) {
 				TransferItemToStash(myPlayer, pcursinvitem);

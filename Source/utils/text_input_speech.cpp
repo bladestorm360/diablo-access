@@ -1,7 +1,8 @@
 /**
  * @file utils/text_input_speech.cpp
  *
- * Speech for editing a text field (chat, Lua console): what the caret moved onto and what was deleted.
+ * Speech for editing a text field (chat, Lua console, gold amounts): what the caret moved onto and
+ * what was deleted.
  */
 #include "utils/text_input_speech.hpp"
 
@@ -9,6 +10,9 @@
 #include <string>
 #include <string_view>
 
+#include <fmt/format.h>
+
+#include "utils/format_int.hpp"
 #include "utils/language.h"
 #include "utils/screen_reader.hpp"
 #include "utils/sdl_compat.h"
@@ -115,17 +119,9 @@ void SpeakFragment(std::string_view fragment)
 	SpeakText(fragment, /*force=*/true);
 }
 
-} // namespace
-
-bool HandleTextInputEventWithSpeech(const SDL_Event &event, TextInputState &state)
+/// Speaks what an editing key did, given the field's text from before the key was handled.
+void SpeakEditingKey(const SDL_Event &event, std::string_view before, TextInputState &state)
 {
-	if (event.type != SDL_EVENT_KEY_DOWN)
-		return HandleTextInputEvent(event, state);
-
-	const std::string before { state.value() };
-	if (!HandleTextInputEvent(event, state))
-		return false;
-
 	const auto modState = SDL_GetModState();
 	const bool isShift = (modState & SDL_KMOD_SHIFT) != 0;
 	const bool isWordJump = (modState & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) != 0;
@@ -161,6 +157,34 @@ bool HandleTextInputEventWithSpeech(const SDL_Event &event, TextInputState &stat
 		break;
 	default:
 		break;
+	}
+}
+
+} // namespace
+
+bool HandleTextInputEventWithSpeech(const SDL_Event &event, TextInputState &state)
+{
+	if (event.type != SDL_EVENT_KEY_DOWN)
+		return HandleTextInputEvent(event, state);
+
+	const std::string before { state.value() };
+	if (!HandleTextInputEvent(event, state))
+		return false;
+
+	SpeakEditingKey(event, before, state);
+	return true;
+}
+
+bool HandleNumberInputEventWithSpeech(const SDL_Event &event, NumberInputState &state)
+{
+	const std::string before { state.textInput().value() };
+	if (!HandleNumberInputEvent(event, state))
+		return false;
+
+	if (event.type == SDL_EVENT_KEY_DOWN) {
+		SpeakEditingKey(event, before, state.textInput());
+	} else if (event.type == SDL_EVENT_TEXT_INPUT && !state.empty() && state.value() == state.max()) {
+		SpeakText(fmt::format(fmt::runtime(_("{:s}, the most you can enter")), FormatInteger(state.max())), /*force=*/true);
 	}
 	return true;
 }

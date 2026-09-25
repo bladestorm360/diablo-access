@@ -172,6 +172,44 @@ TEST_F(InvTest, GoldAutoPlace)
 	EXPECT_EQ(MyPlayer->InvList[1]._ivalue, 900);
 }
 
+// Test that gold withdrawn from the stash lands as full stacks, not one oversized pile
+TEST_F(InvTest, AddGoldToInventory_fullStacks)
+{
+	SNetInitializeProvider(SELCONN_LOOPBACK, nullptr);
+
+	clear_inventory();
+
+	EXPECT_EQ(AddGoldToInventory(*MyPlayer, 2 * GOLD_MAX_LIMIT), 0);
+	// We expect the inventory:
+	// | 5000 | 5000 | ...
+	ASSERT_EQ(MyPlayer->_pNumInv, 2);
+	EXPECT_EQ(MyPlayer->InvList[0]._ivalue, GOLD_MAX_LIMIT);
+	EXPECT_EQ(MyPlayer->InvList[1]._ivalue, GOLD_MAX_LIMIT);
+	EXPECT_EQ(CalculateGold(*MyPlayer), 2 * GOLD_MAX_LIMIT);
+}
+
+// Test that a partial pile is topped up before new stacks are made
+TEST_F(InvTest, AddGoldToInventory_topsUpPartialPile)
+{
+	SNetInitializeProvider(SELCONN_LOOPBACK, nullptr);
+
+	clear_inventory();
+	// Put 3347 gold into the inventory:
+	// | 3347 | ...
+	MyPlayer->InvList[0]._itype = ItemType::Gold;
+	MyPlayer->InvList[0]._ivalue = 3347;
+	MyPlayer->InvGrid[0] = 1;
+	MyPlayer->_pNumInv = 1;
+
+	EXPECT_EQ(AddGoldToInventory(*MyPlayer, 2 * GOLD_MAX_LIMIT), 0);
+	// We expect the inventory:
+	// | 5000 | 5000 | 3347 | ...
+	ASSERT_EQ(MyPlayer->_pNumInv, 3);
+	EXPECT_EQ(MyPlayer->InvList[0]._ivalue, GOLD_MAX_LIMIT);
+	EXPECT_EQ(MyPlayer->InvList[1]._ivalue, GOLD_MAX_LIMIT);
+	EXPECT_EQ(MyPlayer->InvList[2]._ivalue, 3347);
+}
+
 // Test removing an item from inventory with no other items.
 TEST_F(InvTest, RemoveInvItem)
 {

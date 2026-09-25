@@ -1,7 +1,8 @@
 /**
  * @file utils/text_input_speech.hpp
  *
- * Speech for editing a text field (chat, Lua console): what the caret moved onto and what was deleted.
+ * Speech for editing a text field (chat, Lua console, gold amounts): what the caret moved onto and
+ * what was deleted.
  */
 #pragma once
 
@@ -25,6 +26,14 @@ namespace devilution {
  * Typed characters are left to the screen reader's own typing echo.
  */
 bool HandleTextInputEventWithSpeech(const SDL_Event &event, TextInputState &state);
+
+/**
+ * @brief Same as HandleNumberInputEvent, with the editing-key speech of HandleTextInputEventWithSpeech.
+ *
+ * A typed digit that takes the amount to its maximum also speaks the maximum: the field silently
+ * snaps to it, which the screen reader's echo of the digit does not reveal.
+ */
+bool HandleNumberInputEventWithSpeech(const SDL_Event &event, NumberInputState &state);
 
 /** @brief Speaks the whole field, or "blank" when it is empty. */
 void SpeakTextInputValue(std::string_view value);

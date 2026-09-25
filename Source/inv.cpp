@@ -1679,6 +1679,9 @@ void TransferItemToStash(Player &player, int location)
 
 	PlaySFX(ItemInvSnds[ItemCAnimTbl[item._iCurs]]);
 
+	// Gold joins the stash's single total rather than a cell. Read it before removal clears the item.
+	const int depositedGold = item._itype == ItemType::Gold ? item._ivalue : 0;
+
 	if (location < INVITEM_INV_FIRST) {
 		RemoveEquipment(player, static_cast<inv_body_loc>(location), false);
 		CalcPlrInv(player, true);
@@ -1686,6 +1689,12 @@ void TransferItemToStash(Player &player, int location)
 		player.RemoveInvItem(location - INVITEM_INV_FIRST);
 	else
 		player.RemoveSpdBarItem(location - INVITEM_BELT_FIRST);
+
+	if (depositedGold != 0) {
+		// Without this the character keeps counting the deposited gold, and shops count it twice.
+		player._pGold = CalculateGold(player);
+		SpeakStashGoldDeposit(depositedGold);
+	}
 }
 
 void CheckInvItem(bool isShiftHeld, bool isCtrlHeld)

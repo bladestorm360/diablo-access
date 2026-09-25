@@ -30,8 +30,10 @@
 #include "utils/display.h"
 #include "utils/format_int.hpp"
 #include "utils/language.h"
+#include "utils/screen_reader.hpp"
 #include "utils/sdl_compat.h"
 #include "utils/str_cat.hpp"
+#include "utils/text_input_speech.hpp"
 #include "utils/utf8.hpp"
 
 namespace devilution {
@@ -127,11 +129,13 @@ void CheckStashPaste(Point cursorPosition)
 	if (player.HoldItem._itype == ItemType::Gold) {
 		if (Stash.gold > std::numeric_limits<int>::max() - player.HoldItem._ivalue)
 			return;
-		Stash.gold += player.HoldItem._ivalue;
+		const int amount = player.HoldItem._ivalue;
+		Stash.gold += amount;
 		player.HoldItem.clear();
 		PlaySFX(SfxID::ItemGold);
 		Stash.dirty = true;
 		NewCursor(CURSOR_HAND);
+		SpeakStashGoldDeposit(amount);
 		return;
 	}
 
@@ -260,6 +264,8 @@ void CheckStashCut(Point cursorPosition, bool automaticMove)
 void WithdrawGold(Player &player, int amount)
 {
 	AddGoldToInventory(player, amount);
+	// Without this the character does not count the withdrawn gold, and shops think it cannot pay.
+	player._pGold = CalculateGold(player);
 	Stash.gold -= amount;
 	Stash.dirty = true;
 }
@@ -317,25 +323,8 @@ void CheckStashButtonRelease(Point mousePosition)
 
 	Rectangle stashButton = StashButtonRect[StashButtonPressed];
 	stashButton.position = GetPanelPosition(UiPanels::Stash, stashButton.position);
-	if (stashButton.contains(mousePosition)) {
-		switch (StashButtonPressed) {
-		case 0:
-			Stash.PreviousPage(10);
-			break;
-		case 1:
-			Stash.PreviousPage();
-			break;
-		case 2:
-			StartGoldWithdraw();
-			break;
-		case 3:
-			Stash.NextPage();
-			break;
-		case 4:
-			Stash.NextPage(10);
-			break;
-		}
-	}
+	if (stashButton.contains(mousePosition))
+		PressStashButton(static_cast<StashButton>(StashButtonPressed));
 
 	StashButtonPressed = -1;
 }
@@ -612,6 +601,10 @@ void StartGoldWithdraw()
 	    .max = std::min(RoomForGold(), Stash.gold),
 	});
 	SDLC_StartTextInput(ghMainWnd);
+
+	SpeakText(StrCat(_("How many gold pieces do you want to withdraw?"), " ",
+	              fmt::format(fmt::runtime(_("Up to {:s}.")), FormatInteger(GoldWithdrawInputState->max()))),
+	    /*force=*/true);
 }
 
 void WithdrawGoldKeyPress(SDL_Keycode vkey)
@@ -629,10 +622,14 @@ void WithdrawGoldKeyPress(SDL_Keycode vkey)
 		if (const int value = GoldWithdrawInputState->value(); value != 0) {
 			WithdrawGold(myPlayer, value);
 			PlaySFX(SfxID::ItemGold);
+			SpeakText(StrCat(fmt::format(fmt::runtime(_("Withdrew {:s} gold.")), FormatInteger(value)), " ", StashGoldForSpeech()), /*force=*/true);
+		} else {
+			SpeakText(_("Cancelled."), /*force=*/true);
 		}
 		CloseGoldWithdraw();
 		break;
 	case SDLK_ESCAPE:
+		SpeakText(_("Cancelled."), /*force=*/true);
 		CloseGoldWithdraw();
 		break;
 	default:
@@ -683,7 +680,66 @@ void CloseGoldWithdraw()
 
 bool HandleGoldWithdrawTextInputEvent(const SDL_Event &event)
 {
-	return HandleNumberInputEvent(event, *GoldWithdrawInputState);
+	return HandleNumberInputEventWithSpeech(event, *GoldWithdrawInputState);
+}
+
+Rectangle GetStashButtonRect(StashButton button)
+{
+	Rectangle rect = StashButtonRect[static_cast<size_t>(button)];
+	rect.position = GetPanelPosition(UiPanels::Stash, rect.position);
+	return rect;
+}
+
+void PressStashButton(StashButton button)
+{
+	switch (button) {
+	case StashButton::BackTenPages:
+		Stash.PreviousPage(10);
+		break;
+	case StashButton::PreviousPage:
+		Stash.PreviousPage();
+		break;
+	case StashButton::WithdrawGold:
+		StartGoldWithdraw();
+		break;
+	case StashButton::NextPage:
+		Stash.NextPage();
+		break;
+	case StashButton::ForwardTenPages:
+		Stash.NextPage(10);
+		break;
+	}
+}
+
+std::string StashPageForSpeech()
+{
+	const std::string page = fmt::format(fmt::runtime(_("Page {:d} of {:d}")), Stash.GetPage() + 1, CountStashPages);
+
+	// find() rather than [], which would add an empty page to the saved stash.
+	const auto grid = Stash.stashGrids.find(Stash.GetPage());
+	ankerl::unordered_dense::set<StashStruct::StashCell> items;
+	if (grid != Stash.stashGrids.end()) {
+		for (const auto &column : grid->second) {
+			for (const StashStruct::StashCell cell : column) {
+				if (cell != 0)
+					items.insert(cell);
+			}
+		}
+	}
+	if (items.empty())
+		return StrCat(page, ", ", _("empty"));
+	const int count = static_cast<int>(items.size());
+	return StrCat(page, ", ", fmt::format(fmt::runtime(ngettext("{:d} item", "{:d} items", count)), count));
+}
+
+std::string StashGoldForSpeech()
+{
+	return fmt::format(fmt::runtime(_("Gold in stash: {:s}")), FormatInteger(Stash.gold));
+}
+
+void SpeakStashGoldDeposit(int amount)
+{
+	SpeakText(StrCat(fmt::format(fmt::runtime(_("Deposited {:s} gold.")), FormatInteger(amount)), " ", StashGoldForSpeech()), /*force=*/true);
 }
 
 bool AutoPlaceItemInStash(Player &player, const Item &item, bool persistItem)
