@@ -30,7 +30,9 @@ bool IsTileWalkable(Point position, bool ignoreDoors)
 {
 	Object *object = FindObjectAtPosition(position);
 	if (object != nullptr) {
-		if (ignoreDoors && object->isDoor()) {
+		// The door's own tile only. AddDoor also registers the arch beside a cathedral or crypt door,
+		// which is wall: monsters that open doors must not walk into it.
+		if (ignoreDoors && object->isDoor() && object->position == position) {
 			return true;
 		}
 		if (object->_oSolidFlag) {

@@ -36,6 +36,7 @@ set(tests
   tile_properties_test
   timedemo_test
   townerdat_test
+  tracker_audit_test
   writehero_test
   vendor_test
 )

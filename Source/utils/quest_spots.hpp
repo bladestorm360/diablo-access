@@ -54,7 +54,4 @@ struct QuestSpot {
 /** @brief "<label>, in range. <hint>" */
 [[nodiscard]] std::string QuestSpotInRangeMessage(const QuestSpot &spot, const Player &player);
 
-/** @brief The walkable in-range tile with the shortest walk from @p from. */
-[[nodiscard]] std::optional<Point> FindQuestSpotApproachTile(const Player &player, Point from, const QuestSpot &spot);
-
 } // namespace devilution

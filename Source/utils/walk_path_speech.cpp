@@ -109,10 +109,12 @@ bool IsTileWalkableForTrackerPath(Point position, bool ignoreDoors, bool ignoreB
 {
 	Object *object = FindObjectAtPosition(position);
 	if (object != nullptr) {
-		if (ignoreDoors && object->isDoor()) {
+		// The door's own tile only: the arch AddDoor registers beside it is wall.
+		if (ignoreDoors && object->isDoor() && object->position == position) {
 			return true;
 		}
-		if (ignoreBreakables && object->_oSolidFlag && object->IsBreakable()) {
+		// A broken crux stays solid.
+		if (ignoreBreakables && object->_oSolidFlag && object->IsBreakable() && !object->IsCrux()) {
 			return true;
 		}
 		if (object->_oSolidFlag) {
@@ -169,13 +171,35 @@ namespace {
 
 using PosOkForSpeechFn = bool (*)(const Player &, Point);
 
+constexpr std::array<int8_t, 4> AxisDirections = {
+	WALK_NE,
+	WALK_SW,
+	WALK_SE,
+	WALK_NW,
+};
+
+constexpr std::array<int8_t, 8> AllDirections = {
+	WALK_NE,
+	WALK_SW,
+	WALK_SE,
+	WALK_NW,
+	WALK_N,
+	WALK_E,
+	WALK_S,
+	WALK_W,
+};
+
+/**
+ * Breadth-first search from `startPosition` to the nearest tile where `isGoal` holds. Each tile's
+ * steps are tried in the order that heads for `heading`, which decides between routes of equal length.
+ */
 template <size_t NumDirections>
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechBfs(const Player &player, Point startPosition, Point destinationPosition, PosOkForSpeechFn posOk, const std::array<int8_t, NumDirections> &walkDirections, bool allowDiagonalSteps, bool allowDestinationNonWalkable)
+std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechBfs(const Player &player, Point startPosition, Point heading, tl::function_ref<bool(Point)> isGoal, PosOkForSpeechFn posOk, const std::array<int8_t, NumDirections> &walkDirections, bool allowDiagonalSteps, bool allowGoalNonWalkable)
 {
-	if (!InDungeonBounds(startPosition) || !InDungeonBounds(destinationPosition))
+	if (!InDungeonBounds(startPosition))
 		return std::nullopt;
 
-	if (startPosition == destinationPosition)
+	if (isGoal(startPosition))
 		return std::vector<int8_t> {};
 
 	std::array<bool, MAXDUNX * MAXDUNY> visited {};
@@ -183,6 +207,7 @@ std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechBfs(const Player
 	parentDir.fill(WALK_NONE);
 
 	std::queue<Point> queue;
+	std::optional<Point> reachedGoal;
 
 	const auto indexOf = [](Point position) -> size_t {
 		return static_cast<size_t>(position.x) + static_cast<size_t>(position.y) * MAXDUNX;
@@ -197,32 +222,32 @@ std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechBfs(const Player
 		if (visited[idx])
 			return;
 
+		const bool goal = isGoal(next);
 		const bool ok = posOk(player, next);
 		if (ok) {
 			if (!CanStep(current, next))
 				return;
 		} else {
-			if (!allowDestinationNonWalkable || next != destinationPosition)
+			if (!allowGoalNonWalkable || !goal)
 				return;
 		}
 
 		visited[idx] = true;
 		parentDir[idx] = dir;
-		queue.push(next);
+		if (goal)
+			reachedGoal = next;
+		else
+			queue.push(next);
 	};
 
 	visited[indexOf(startPosition)] = true;
 	queue.push(startPosition);
 
-	const auto hasReachedDestination = [&]() -> bool {
-		return visited[indexOf(destinationPosition)];
-	};
-
-	while (!queue.empty() && !hasReachedDestination()) {
+	while (!queue.empty() && !reachedGoal) {
 		const Point current = queue.front();
 		queue.pop();
 
-		const Displacement delta = destinationPosition - current;
+		const Displacement delta = heading - current;
 		const int deltaAbsX = delta.deltaX >= 0 ? delta.deltaX : -delta.deltaX;
 		const int deltaAbsY = delta.deltaY >= 0 ? delta.deltaY : -delta.deltaY;
 
@@ -258,16 +283,16 @@ std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechBfs(const Player
 			addUniqueDir(dir);
 		}
 
-		for (size_t i = 0; i < prioritizedCount; ++i) {
+		for (size_t i = 0; i < prioritizedCount && !reachedGoal; ++i) {
 			enqueue(current, prioritizedDirs[i]);
 		}
 	}
 
-	if (!hasReachedDestination())
+	if (!reachedGoal)
 		return std::nullopt;
 
 	std::vector<int8_t> path;
-	Point position = destinationPosition;
+	Point position = *reachedGoal;
 	while (position != startPosition) {
 		const int8_t dir = parentDir[indexOf(position)];
 		if (dir == WALK_NONE)
@@ -281,31 +306,23 @@ std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechBfs(const Player
 	return path;
 }
 
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechWithPosOk(const Player &player, Point startPosition, Point destinationPosition, PosOkForSpeechFn posOk, bool allowDestinationNonWalkable)
+std::optional<std::vector<int8_t>> FindWalkPathWithPosOk(const Player &player, Point startPosition, Point heading, tl::function_ref<bool(Point)> isGoal, PosOkForSpeechFn posOk, bool preferAxisSteps, bool allowGoalNonWalkable)
 {
-	constexpr std::array<int8_t, 4> AxisDirections = {
-		WALK_NE,
-		WALK_SW,
-		WALK_SE,
-		WALK_NW,
-	};
-
-	constexpr std::array<int8_t, 8> AllDirections = {
-		WALK_NE,
-		WALK_SW,
-		WALK_SE,
-		WALK_NW,
-		WALK_N,
-		WALK_E,
-		WALK_S,
-		WALK_W,
-	};
-
-	if (const std::optional<std::vector<int8_t>> axisPath = FindKeyboardWalkPathForSpeechBfs(player, startPosition, destinationPosition, posOk, AxisDirections, /*allowDiagonalSteps=*/false, allowDestinationNonWalkable); axisPath) {
-		return axisPath;
+	if (preferAxisSteps) {
+		if (std::optional<std::vector<int8_t>> axisPath = FindKeyboardWalkPathForSpeechBfs(player, startPosition, heading, isGoal, posOk, AxisDirections, /*allowDiagonalSteps=*/false, allowGoalNonWalkable))
+			return axisPath;
 	}
 
-	return FindKeyboardWalkPathForSpeechBfs(player, startPosition, destinationPosition, posOk, AllDirections, /*allowDiagonalSteps=*/true, allowDestinationNonWalkable);
+	return FindKeyboardWalkPathForSpeechBfs(player, startPosition, heading, isGoal, posOk, AllDirections, /*allowDiagonalSteps=*/true, allowGoalNonWalkable);
+}
+
+std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechWithPosOk(const Player &player, Point startPosition, Point destinationPosition, PosOkForSpeechFn posOk, bool allowDestinationNonWalkable)
+{
+	if (!InDungeonBounds(destinationPosition))
+		return std::nullopt;
+
+	return FindWalkPathWithPosOk(
+	    player, startPosition, destinationPosition, [destinationPosition](Point position) { return position == destinationPosition; }, posOk, /*preferAxisSteps=*/true, allowDestinationNonWalkable);
 }
 
 template <size_t NumDirections>
@@ -443,46 +460,13 @@ std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeech(const Player &p
 	return FindKeyboardWalkPathForSpeechWithPosOk(player, startPosition, destinationPosition, PosOkPlayerIgnoreDoors, allowDestinationNonWalkable);
 }
 
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechRespectingDoors(const Player &player, Point startPosition, Point destinationPosition, bool allowDestinationNonWalkable)
+std::optional<std::vector<int8_t>> FindWalkPathToGoal(const Player &player, Point startPosition, Point heading, tl::function_ref<bool(Point)> isGoal, bool (*posOk)(const Player &, Point), bool preferAxisSteps)
 {
-	return FindKeyboardWalkPathForSpeechWithPosOk(player, startPosition, destinationPosition, PosOkPlayer, allowDestinationNonWalkable);
-}
-
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechIgnoringMonsters(const Player &player, Point startPosition, Point destinationPosition, bool allowDestinationNonWalkable)
-{
-	return FindKeyboardWalkPathForSpeechWithPosOk(player, startPosition, destinationPosition, PosOkPlayerIgnoreDoorsAndMonsters, allowDestinationNonWalkable);
-}
-
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechRespectingDoorsIgnoringMonsters(const Player &player, Point startPosition, Point destinationPosition, bool allowDestinationNonWalkable)
-{
-	return FindKeyboardWalkPathForSpeechWithPosOk(player, startPosition, destinationPosition, PosOkPlayerIgnoreMonsters, allowDestinationNonWalkable);
-}
-
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechLenient(const Player &player, Point startPosition, Point destinationPosition, bool allowDestinationNonWalkable)
-{
-	return FindKeyboardWalkPathForSpeechWithPosOk(player, startPosition, destinationPosition, PosOkPlayerIgnoreDoorsMonstersAndBreakables, allowDestinationNonWalkable);
+	return FindWalkPathWithPosOk(player, startPosition, heading, isGoal, posOk, preferAxisSteps, /*allowGoalNonWalkable=*/false);
 }
 
 std::optional<std::vector<int8_t>> FindKeyboardWalkPathToClosestReachableForSpeech(const Player &player, Point startPosition, Point destinationPosition, Point &closestPosition)
 {
-	constexpr std::array<int8_t, 4> AxisDirections = {
-		WALK_NE,
-		WALK_SW,
-		WALK_SE,
-		WALK_NW,
-	};
-
-	constexpr std::array<int8_t, 8> AllDirections = {
-		WALK_NE,
-		WALK_SW,
-		WALK_SE,
-		WALK_NW,
-		WALK_N,
-		WALK_E,
-		WALK_S,
-		WALK_W,
-	};
-
 	Point axisClosest;
 	const std::optional<std::vector<int8_t>> axisPath = FindKeyboardWalkPathToClosestReachableForSpeechBfs(player, startPosition, destinationPosition, PosOkPlayerIgnoreDoors, AxisDirections, /*allowDiagonalSteps=*/false, axisClosest);
 

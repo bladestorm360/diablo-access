@@ -39,6 +39,7 @@ TEST(TilePropertiesTest, Walkable)
 	EXPECT_TRUE(IsTileWalkable({ 5, 5 }, true)) << "Non-solid tiles remain walkable when ignoring doors";
 
 	dObject[5][5] = 1;
+	Objects[0].position = { 5, 5 };
 	Objects[0]._oSolidFlag = true;
 	EXPECT_FALSE(IsTileWalkable({ 5, 5 })) << "Tile occupied by a solid object is unwalkable";
 	EXPECT_FALSE(IsTileWalkable({ 5, 5 }, true)) << "Tile occupied by a solid non-door object are unwalkable when ignoring doors";
@@ -56,7 +57,7 @@ TEST(TilePropertiesTest, Walkable)
 	EXPECT_TRUE(IsTileWalkable({ 5, 5 }, true)) << "Solid tiles occupied by an open door become walkable when ignoring doors";
 }
 
-TEST(TilePropertiesTest, DoorArchwaySolidTileBecomesWalkableWhenIgnoringDoors)
+TEST(TilePropertiesTest, DoorArchwayStaysSolidWhenIgnoringDoors)
 {
 	dPiece[5][4] = 0;
 	SOLData[0] = TileProperties::Solid;
@@ -65,11 +66,14 @@ TEST(TilePropertiesTest, DoorArchwaySolidTileBecomesWalkableWhenIgnoringDoors)
 	    << "Solid tile with no object is unwalkable even when ignoring doors";
 
 	Objects[0]._otype = _object_id::OBJ_L1LDOOR;
+	Objects[0].position = { 5, 5 };
 	Objects[0]._oSolidFlag = false;
 	dObject[5][5] = 1;
 	dObject[5][4] = -1; // Negative dObject value: extended area of Objects[0] (the door)
-	EXPECT_TRUE(IsTileWalkable({ 5, 4 }, true))
-	    << "Solid archway tile referencing a door becomes walkable when ignoring doors";
+	EXPECT_EQ(FindObjectAtPosition({ 5, 4 }), &Objects[0])
+	    << "The archway tile resolves to its door, so routes can tell a door is in the way";
+	EXPECT_FALSE(IsTileWalkable({ 5, 4 }, true))
+	    << "Solid archway tile is wall: only the door's own tile opens";
 	EXPECT_FALSE(IsTileWalkable({ 5, 4 }))
 	    << "Solid archway tile referencing a door is still unwalkable normally";
 

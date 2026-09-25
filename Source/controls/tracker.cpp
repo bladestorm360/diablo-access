@@ -65,6 +65,7 @@ TrackerTargetCategory SelectedTrackerTargetCategory = TrackerTargetCategory::Ite
 
 TrackerTargetCategory AutoWalkTrackerTargetCategory = TrackerTargetCategory::Items; ///< Category of the active auto-walk target.
 int AutoWalkTrackerTargetId = -1;                                                   ///< ID of the target being auto-walked to, or -1 if inactive.
+bool AutoWalkTrackerStarting = false;                                               ///< Set until the auto-walk plans its first step.
 
 /// Maximum Chebyshev distance (in tiles) at which the player is considered
 /// close enough to interact with a tracker target.
@@ -218,6 +219,24 @@ void SpeakTrackerTargetCategory()
 	SpeakText(TrackerTargetCategoryLabel(SelectedTrackerTargetCategory), true);
 }
 
+/** Whether a player could stand on the tile once doors are opened and barrels broken. */
+[[nodiscard]] bool CouldStandOn(Point tile)
+{
+	return InDungeonBounds(tile) && IsTileWalkableForTrackerPath(tile, /*ignoreDoors=*/true, /*ignoreBreakables=*/true);
+}
+
+/** Whether a player could stand on or next to the tile, as picking up an item needs. */
+[[nodiscard]] bool HasRoomAround(Point position)
+{
+	for (int dy = -1; dy <= 1; ++dy) {
+		for (int dx = -1; dx <= 1; ++dx) {
+			if (CouldStandOn(position + Displacement { dx, dy }))
+				return true;
+		}
+	}
+	return false;
+}
+
 std::optional<int> FindNearestGroundItemId(Point playerPosition)
 {
 	std::optional<int> bestId;
@@ -231,6 +250,8 @@ std::optional<int> FindNearestGroundItemId(Point playerPosition)
 
 			const Item &item = Items[itemId];
 			if (item.isEmpty() || item._iClass == ICLASS_NONE)
+				continue;
+			if (!HasRoomAround(item.position))
 				continue;
 
 			const int distance = playerPosition.WalkingDistance(Point { x, y });
@@ -261,7 +282,7 @@ std::optional<int> FindNearestCorpseId(Point playerPosition)
 
 	for (int y = 0; y < MAXDUNY; ++y) {
 		for (int x = 0; x < MAXDUNX; ++x) {
-			if (dCorpse[x][y] == 0)
+			if (dCorpse[x][y] == 0 || !HasRoomAround({ x, y }))
 				continue;
 
 			const Point position { x, y };
@@ -366,6 +387,8 @@ constexpr int QuestSpotTrackerIdBase = 10000;
 			const Item &item = Items[itemId];
 			if (item.isEmpty() || item._iClass == ICLASS_NONE)
 				continue;
+			if (!HasRoomAround(item.position))
+				continue;
 
 			const int distance = playerPosition.WalkingDistance(Point { x, y });
 			if (distance > maxDistance)
@@ -394,7 +417,7 @@ constexpr int QuestSpotTrackerIdBase = 10000;
 
 	for (int y = minY; y <= maxY; ++y) {
 		for (int x = minX; x <= maxX; ++x) {
-			if (dCorpse[x][y] == 0)
+			if (dCorpse[x][y] == 0 || !HasRoomAround({ x, y }))
 				continue;
 
 			const Point position { x, y };
@@ -442,9 +465,38 @@ constexpr int QuestSpotTrackerIdBase = 10000;
 	return setlevel && setlvlnum == SL_VILEBETRAYER && IsAnyOf(object._otype, _object_id::OBJ_MCIRCLE1, _object_id::OBJ_MCIRCLE2);
 }
 
-[[nodiscard]] int TrackerObjectInteractDistance(const Object &object)
+/**
+ * Whether a player on `tile` can use `object`, by the game's rule (IsPlayerAdjacentToObject in
+ * player.cpp): a tile around it, or beyond the far end of an object two tiles long. Lazarus' magic
+ * circles work only when stood on.
+ */
+[[nodiscard]] bool CanUseObjectFrom(const Object &object, Point tile)
 {
-	return IsLazarusMagicCircleObject(object) ? 0 : TrackerInteractDistanceTiles;
+	if (IsLazarusMagicCircleObject(object))
+		return tile == object.position;
+	const int dx = std::abs(tile.x - object.position.x);
+	int dy = std::abs(tile.y - object.position.y);
+	if (dy > 1 && object.position.y >= 1 && FindObjectAtPosition(object.position + Direction::NorthEast) == &object)
+		dy = std::abs(tile.y - object.position.y + 1);
+	return dx <= 1 && dy <= 1;
+}
+
+/**
+ * Whether any tile lets a player use the object. The level generator can leave an object inside the
+ * rock at the map's corner: a theme room's shrine or library whose place other objects took goes to
+ * tile (0,0) (Theme_Shrine ignores TFit_Shrine failing), and its candles land off the map, where they
+ * read as dead bodies at the far corners.
+ */
+[[nodiscard]] bool HasRoomToUseObject(const Object &object)
+{
+	for (int dy = -2; dy <= 1; ++dy) {
+		for (int dx = -1; dx <= 1; ++dx) {
+			const Point tile = object.position + Displacement { dx, dy };
+			if (CanUseObjectFrom(object, tile) && CouldStandOn(tile))
+				return true;
+		}
+	}
+	return false;
 }
 
 [[nodiscard]] StringOrView TrackerObjectLabelForSpeech(const Object &object)
@@ -515,7 +567,7 @@ template <typename Predicate>
 			const Object &object = Objects[objectId];
 			if (object._otype == OBJ_NULL)
 				continue;
-			if (!predicate(object))
+			if (!predicate(object) || !HasRoomToUseObject(object))
 				continue;
 
 			const int distance = playerPosition.WalkingDistance(Point { x, y });
@@ -560,7 +612,7 @@ template <typename Predicate>
 			const Object &object = Objects[objectId];
 			if (object._otype == OBJ_NULL)
 				continue;
-			if (!predicate(object))
+			if (!predicate(object) || !HasRoomToUseObject(object))
 				continue;
 
 			const int distance = playerPosition.WalkingDistance(Point { x, y });
@@ -1099,121 +1151,58 @@ std::optional<int> FindNearestMonsterId(Point playerPosition)
 	return bestId;
 }
 
-std::optional<Point> FindBestAdjacentApproachTile(const Player &player, Point playerPosition, Point targetPosition)
-{
-	std::optional<Point> best;
-	size_t bestPathLength = 0;
-	int bestDistance = 0;
+/** A place the tracker leads to, and the tiles that count as having reached it. */
+struct TrackerGoal {
+	/** The target's own tile. Routes head for it. */
+	Point position;
+	/** An object is reached from wherever the game lets the player use it. */
+	const Object *object = nullptr;
+	/** A quest spot has a rule of its own. */
+	std::optional<QuestSpot> spot;
+	/** Someone or something solid stands on its tile, so it is reached from the tiles around it. */
+	bool occupied = false;
 
-	std::optional<Point> bestFallback;
-	int bestFallbackDistance = 0;
-
-	for (int dy = -1; dy <= 1; ++dy) {
-		for (int dx = -1; dx <= 1; ++dx) {
-			if (dx == 0 && dy == 0)
-				continue;
-
-			const Point tile { targetPosition.x + dx, targetPosition.y + dy };
-			if (!PosOkPlayer(player, tile))
-				continue;
-
-			const int distance = playerPosition.WalkingDistance(tile);
-
-			if (!bestFallback || distance < bestFallbackDistance) {
-				bestFallback = tile;
-				bestFallbackDistance = distance;
-			}
-
-			const std::optional<std::vector<int8_t>> path = FindKeyboardWalkPathForSpeech(player, playerPosition, tile);
-			if (!path)
-				continue;
-
-			const size_t pathLength = path->size();
-			if (!best || pathLength < bestPathLength || (pathLength == bestPathLength && distance < bestDistance)) {
-				best = tile;
-				bestPathLength = pathLength;
-				bestDistance = distance;
-			}
-		}
+	/**
+	 * Whether a player on `tile` has reached the target. Anything that is not an object, quest spot or
+	 * someone standing there is walked onto: stairs, exits, portals, items and dead bodies.
+	 */
+	[[nodiscard]] bool IsReachedFrom(Point tile) const
+	{
+		if (spot)
+			return IsQuestSpotInRange(*spot, tile);
+		if (object != nullptr)
+			return CanUseObjectFrom(*object, tile);
+		if (occupied)
+			return tile != position && position.WalkingDistance(tile) <= TrackerInteractDistanceTiles;
+		return tile == position;
 	}
 
-	if (best)
-		return best;
-
-	return bestFallback;
-}
-
-std::optional<Point> FindBestApproachTileForObject(const Player &player, Point playerPosition, const Object &object)
-{
-	if (!object._oSolidFlag && PosOkPlayer(player, object.position))
-		return object.position;
-
-	std::optional<Point> best;
-	size_t bestPathLength = 0;
-	int bestDistance = 0;
-
-	std::optional<Point> bestFallback;
-	int bestFallbackDistance = 0;
-
-	const auto considerTile = [&](Point tile) {
-		if (!PosOkPlayerIgnoreDoors(player, tile))
-			return;
-
-		const int distance = playerPosition.WalkingDistance(tile);
-		if (!bestFallback || distance < bestFallbackDistance) {
-			bestFallback = tile;
-			bestFallbackDistance = distance;
-		}
-
-		const std::optional<std::vector<int8_t>> path = FindKeyboardWalkPathForSpeech(player, playerPosition, tile);
-		if (!path)
-			return;
-
-		const size_t pathLength = path->size();
-		if (!best || pathLength < bestPathLength || (pathLength == bestPathLength && distance < bestDistance)) {
-			best = tile;
-			bestPathLength = pathLength;
-			bestDistance = distance;
-		}
-	};
-
-	for (int dy = -1; dy <= 1; ++dy) {
-		for (int dx = -1; dx <= 1; ++dx) {
-			if (dx == 0 && dy == 0)
-				continue;
-			considerTile(object.position + Displacement { dx, dy });
-		}
+	/** Whether a target that is walked onto is one step from `tile`. */
+	[[nodiscard]] bool IsOneStepFrom(Point tile) const
+	{
+		return object == nullptr && !spot && !occupied && position.WalkingDistance(tile) == 1 && CanStep(tile, position);
 	}
-
-	if (FindObjectAtPosition(object.position + Direction::NorthEast) == &object) {
-		for (int dx = -1; dx <= 1; ++dx) {
-			considerTile(object.position + Displacement { dx, -2 });
-		}
-	}
-
-	if (best)
-		return best;
-
-	return bestFallback;
-}
-
-struct DoorBlockInfo {
-	Point beforeDoor;
-	Point doorPosition;
 };
 
-std::optional<DoorBlockInfo> FindFirstClosedDoorOnWalkPath(Point startPosition, const int8_t *path, int steps)
+/** A target walked onto, unless something solid stands there, such as the pedestal under the Magic Rock. */
+[[nodiscard]] TrackerGoal TileGoal(Point position)
 {
-	Point position = startPosition;
-	for (int i = 0; i < steps; ++i) {
-		const Point next = NextPositionForWalkDirection(position, path[i]);
-		Object *object = FindObjectAtPosition(next);
-		if (object != nullptr && object->isDoor() && object->_oVar4 == DOOR_CLOSED) {
-			return DoorBlockInfo { .beforeDoor = position, .doorPosition = object->position };
-		}
-		position = next;
-	}
-	return std::nullopt;
+	return { .position = position, .occupied = !IsTileWalkable(position) };
+}
+
+[[nodiscard]] TrackerGoal OccupiedTileGoal(Point position)
+{
+	return { .position = position, .occupied = true };
+}
+
+[[nodiscard]] TrackerGoal ObjectGoal(const Object &object)
+{
+	return { .position = object.position, .object = &object };
+}
+
+[[nodiscard]] TrackerGoal QuestSpotGoal(const QuestSpot &spot)
+{
+	return { .position = spot.position, .spot = spot };
 }
 
 enum class TrackerPathBlockType : uint8_t {
@@ -1229,16 +1218,11 @@ struct TrackerPathBlockInfo {
 	Point blockPosition;
 };
 
-[[nodiscard]] std::optional<TrackerPathBlockInfo> FindFirstTrackerPathBlock(Point startPosition, const int8_t *path, size_t steps, bool considerDoors, bool considerMonsters, bool considerBreakables, Point targetPosition)
+[[nodiscard]] std::optional<TrackerPathBlockInfo> FindFirstTrackerPathBlock(Point startPosition, const int8_t *path, size_t steps, bool considerDoors, bool considerMonsters, bool considerBreakables)
 {
 	Point position = startPosition;
 	for (size_t i = 0; i < steps; ++i) {
 		const Point next = NextPositionForWalkDirection(position, path[i]);
-		if (next == targetPosition) {
-			position = next;
-			continue;
-		}
-
 		Object *object = FindObjectAtPosition(next);
 		if (considerDoors && object != nullptr && object->isDoor() && object->_oVar4 == DOOR_CLOSED) {
 			return TrackerPathBlockInfo {
@@ -1277,34 +1261,128 @@ struct TrackerPathBlockInfo {
 	return std::nullopt;
 }
 
+/** A route to a goal, and what it passes through that the player has to clear first. */
+struct TrackerRoute {
+	std::vector<int8_t> path;
+	bool passesDoors = false;
+	bool passesMonsters = false;
+	bool passesBreakables = false;
+};
+
 /**
- * Validates an object-category auto-walk target and computes the walk destination.
+ * The route to the nearest tile where `isGoal` holds, searched over the whole level, by the strictest
+ * rule that finds one: around closed doors, monsters and barrels first, then through doors, then past
+ * monsters, then both, then through barrels as well. Spoken routes prefer steps along the axes.
  */
-template <typename Predicate>
-bool ValidateAutoWalkObjectTarget(
-    const Player &myPlayer, Point playerPosition,
-    Predicate isValid, const char *goneMessage, const char *inRangeMessage,
-    std::optional<Point> &destination)
+[[nodiscard]] std::optional<TrackerRoute> FindTrackerRoute(const Player &player, Point start, Point heading, tl::function_ref<bool(Point)> isGoal, bool preferAxisSteps)
 {
-	const int objectId = AutoWalkTrackerTargetId;
-	if (objectId < 0 || objectId >= MAXOBJECTS) {
-		AutoWalkTrackerTargetId = -1;
-		SpeakText(_(goneMessage), true);
-		return false;
+	struct Rule {
+		bool (*posOk)(const Player &, Point);
+		bool doors;
+		bool monsters;
+		bool breakables;
+	};
+	static constexpr std::array<Rule, 5> Rules { {
+		{ PosOkPlayer, false, false, false },
+		{ PosOkPlayerIgnoreDoors, true, false, false },
+		{ PosOkPlayerIgnoreMonsters, false, true, false },
+		{ PosOkPlayerIgnoreDoorsAndMonsters, true, true, false },
+		{ PosOkPlayerIgnoreDoorsMonstersAndBreakables, true, true, true },
+	} };
+	for (const Rule &rule : Rules) {
+		std::optional<std::vector<int8_t>> path = FindWalkPathToGoal(player, start, heading, isGoal, rule.posOk, preferAxisSteps);
+		if (path)
+			return TrackerRoute { .path = std::move(*path), .passesDoors = rule.doors, .passesMonsters = rule.monsters, .passesBreakables = rule.breakables };
 	}
-	const Object &object = Objects[objectId];
-	if (!isValid(object)) {
-		AutoWalkTrackerTargetId = -1;
-		SpeakText(_(goneMessage), true);
-		return false;
+	return std::nullopt;
+}
+
+/** Cuts a route short before the first closed door, monster or barrel on it, and returns that. */
+std::optional<TrackerPathBlockInfo> StopRouteAtFirstBlock(TrackerRoute &route, Point start)
+{
+	if (!route.passesDoors && !route.passesMonsters && !route.passesBreakables)
+		return std::nullopt;
+	const std::optional<TrackerPathBlockInfo> block = FindFirstTrackerPathBlock(start, route.path.data(), route.path.size(), route.passesDoors, route.passesMonsters, route.passesBreakables);
+	if (block)
+		route.path.resize(block->stepIndex);
+	return block;
+}
+
+[[nodiscard]] std::string_view TrackerPathBlockMessage(TrackerPathBlockType type)
+{
+	switch (type) {
+	case TrackerPathBlockType::Door:
+		return _("A door is blocking the path. Open it and try again.");
+	case TrackerPathBlockType::Monster:
+		return _("A monster is blocking the path. Clear it and try again.");
+	case TrackerPathBlockType::Breakable:
+		return _("A breakable object is blocking the path. Destroy it and try again.");
 	}
-	if (playerPosition.WalkingDistance(object.position) <= TrackerObjectInteractDistance(object)) {
-		AutoWalkTrackerTargetId = -1;
-		SpeakText(_(inRangeMessage), true);
-		return false;
+	return {};
+}
+
+/** Said after directions that end at something in the way. */
+[[nodiscard]] std::string_view TrackerPathBlockAheadLabel(TrackerPathBlockType type)
+{
+	switch (type) {
+	case TrackerPathBlockType::Door:
+		return _("then a closed door");
+	case TrackerPathBlockType::Monster:
+		return _("then a monster");
+	case TrackerPathBlockType::Breakable:
+		return _("then a breakable object");
 	}
-	destination = FindBestApproachTileForObject(myPlayer, playerPosition, object);
-	return true;
+	return {};
+}
+
+/**
+ * Where along `path` the game is told to walk. The game's own path search looks at a limited number
+ * of tiles (engine/path.cpp) and gives up on long or winding routes, so it gets the farthest point on
+ * this route that it finds its way to. Empty if not even the first step works.
+ */
+[[nodiscard]] std::optional<Point> ChooseAutoWalkWaypoint(const Player &player, Point start, const std::vector<int8_t> &path)
+{
+	std::array<int8_t, MaxPathLengthPlayer> enginePath;
+	// One order walks at most MaxPathLengthPlayer - 1 steps.
+	for (size_t steps = std::min(path.size(), MaxPathLengthPlayer - 1); steps > 0; steps /= 2) {
+		const Point waypoint = PositionAfterWalkPathSteps(start, path.data(), static_cast<int>(steps));
+		if (FindPath(CanStep, [&player](Point position) { return PosOkPlayer(player, position); }, start, waypoint, enginePath.data(), enginePath.size()) != 0)
+			return waypoint;
+	}
+	return std::nullopt;
+}
+
+/** Whether a red portal (the way out of Lazarus' lair) stands on the tile. */
+[[nodiscard]] bool IsRedPortalAt(Point position)
+{
+	return std::any_of(Missiles.begin(), Missiles.end(), [position](const Missile &missile) {
+		return missile._mitype == MissileID::RedPortal && missile.position.tile == position;
+	});
+}
+
+/** One step of Shift+Home's walk. */
+struct AutoWalkStep {
+	/** Where to send the player next. Empty when the walk ends. */
+	std::optional<Point> walkTo;
+	/** What to say when the walk ends. */
+	std::string stopMessage;
+};
+
+[[nodiscard]] AutoWalkStep StopAutoWalk(std::string_view message)
+{
+	return { .walkTo = std::nullopt, .stopMessage = std::string(message) };
+}
+
+[[nodiscard]] AutoWalkStep WalkTo(Point position)
+{
+	return { .walkTo = position, .stopMessage = {} };
+}
+
+/** Whether an object tracker target still exists and still belongs to its category. */
+template <typename Predicate>
+[[nodiscard]] bool IsTrackedObjectPresent(int objectId, Predicate isValid)
+{
+	return objectId >= 0 && objectId < MAXOBJECTS && isValid(Objects[objectId]);
 }
 
 /**
@@ -1676,6 +1754,519 @@ void SelectTrackerTargetRelative(int delta)
 
 namespace {
 
+/** Spoken directions from the player to a target, or why there are none. */
+std::string DescribeRouteToTrackerTarget(const Player &player, Point playerPosition, const TrackerGoal &goal, std::string_view targetName)
+{
+	std::optional<TrackerRoute> route = FindTrackerRoute(player, playerPosition, goal.position, [&goal](Point tile) { return goal.IsReachedFrom(tile); }, /*preferAxisSteps=*/true);
+
+	std::string message;
+	if (!targetName.empty())
+		StrAppend(message, targetName, "\n");
+
+	if (!route) {
+		message.append(_("Can't find a path to the target."));
+		Point closestPosition;
+		const std::optional<std::vector<int8_t>> partialPath = FindKeyboardWalkPathToClosestReachableForSpeech(player, playerPosition, goal.position, closestPosition);
+		if (partialPath && !partialPath->empty()) {
+			message.append("\n");
+			AppendKeyboardWalkPathForSpeech(message, *partialPath);
+		}
+		return message;
+	}
+
+	const std::optional<TrackerPathBlockInfo> block = StopRouteAtFirstBlock(*route, playerPosition);
+	if (block && playerPosition.WalkingDistance(block->blockPosition) <= TrackerInteractDistanceTiles)
+		return std::string(TrackerPathBlockMessage(block->type));
+
+	AppendKeyboardWalkPathForSpeech(message, route->path);
+	if (block)
+		StrAppend(message, ", ", TrackerPathBlockAheadLabel(block->type));
+	return message;
+}
+
+/**
+ * What Home says about the selected target: the route to it, or why there is none. With
+ * `cycleTarget`, only its name.
+ */
+std::string DescribeSelectedTrackerTarget(bool cycleTarget)
+{
+	const Point playerPosition = MyPlayer->position.future;
+	int &lockedTargetId = LockedTrackerTargetId(SelectedTrackerTargetCategory);
+
+	std::optional<int> targetId;
+	std::optional<TrackerGoal> goal;
+	StringOrView targetName;
+
+	switch (SelectedTrackerTargetCategory) {
+	case TrackerTargetCategory::Items: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyItemTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No items found.") : _("No next item."));
+		} else if (IsGroundItemPresent(lockedTargetId)) {
+			targetId = lockedTargetId;
+		} else {
+			targetId = FindNearestGroundItemId(playerPosition);
+		}
+		if (!targetId)
+			return std::string(_("No items found."));
+
+		if (!IsGroundItemPresent(*targetId)) {
+			lockedTargetId = -1;
+			return std::string(_("No items found."));
+		}
+
+		lockedTargetId = *targetId;
+		const Item &tracked = Items[*targetId];
+
+		targetName = tracked.getName();
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		goal = TileGoal(tracked.position);
+		break;
+	}
+	case TrackerTargetCategory::Chests: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyChestTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No chests found.") : _("No next chest."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
+			targetId = lockedTargetId;
+		} else {
+			targetId = FindNearestUnopenedChestObjectId(playerPosition);
+		}
+		if (!targetId)
+			return std::string(_("No chests found."));
+
+		const Object &object = Objects[*targetId];
+		if (!IsTrackedChestObject(object)) {
+			lockedTargetId = -1;
+			targetId = FindNearestUnopenedChestObjectId(playerPosition);
+			if (!targetId)
+				return std::string(_("No chests found."));
+		}
+
+		lockedTargetId = *targetId;
+		const Object &tracked = Objects[*targetId];
+
+		targetName = tracked.name();
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = ObjectGoal(tracked);
+		}
+		break;
+	}
+	case TrackerTargetCategory::Doors: {
+		std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyDoorTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
+		for (TrackerCandidate &c : nearbyCandidates) {
+			if (c.id < 0 || c.id >= MAXOBJECTS)
+				continue;
+			c.name = DoorLabelForSpeech(Objects[c.id]);
+		}
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No doors found.") : _("No next door."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
+			targetId = lockedTargetId;
+		} else {
+			targetId = FindNearestDoorObjectId(playerPosition);
+		}
+		if (!targetId)
+			return std::string(_("No doors found."));
+
+		const Object &object = Objects[*targetId];
+		if (!IsTrackedDoorObject(object)) {
+			lockedTargetId = -1;
+			targetId = FindNearestDoorObjectId(playerPosition);
+			if (!targetId)
+				return std::string(_("No doors found."));
+		}
+
+		lockedTargetId = *targetId;
+		const Object &tracked = Objects[*targetId];
+
+		targetName = DoorLabelForSpeech(tracked);
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = ObjectGoal(tracked);
+		}
+		break;
+	}
+	case TrackerTargetCategory::Shrines: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyShrineTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No shrines found.") : _("No next shrine."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
+			targetId = lockedTargetId;
+		} else {
+			targetId = FindNearestShrineObjectId(playerPosition);
+		}
+		if (!targetId)
+			return std::string(_("No shrines found."));
+
+		const Object &object = Objects[*targetId];
+		if (!IsShrineLikeObject(object)) {
+			lockedTargetId = -1;
+			targetId = FindNearestShrineObjectId(playerPosition);
+			if (!targetId)
+				return std::string(_("No shrines found."));
+		}
+
+		lockedTargetId = *targetId;
+		const Object &tracked = Objects[*targetId];
+
+		targetName = tracked.name();
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = ObjectGoal(tracked);
+		}
+		break;
+	}
+	case TrackerTargetCategory::Objects: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyObjectInteractableTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No objects found.") : _("No next object."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
+			targetId = lockedTargetId;
+		} else {
+			targetId = FindNearestMiscInteractableObjectId(playerPosition);
+		}
+		if (!targetId)
+			return std::string(_("No objects found."));
+
+		const Object &object = Objects[*targetId];
+		if (!IsTrackedMiscInteractableObject(object)) {
+			lockedTargetId = -1;
+			targetId = FindNearestMiscInteractableObjectId(playerPosition);
+			if (!targetId)
+				return std::string(_("No objects found."));
+		}
+
+		lockedTargetId = *targetId;
+		const Object &tracked = Objects[*targetId];
+
+		targetName = TrackerObjectLabelForSpeech(tracked);
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = ObjectGoal(tracked);
+		}
+		break;
+	}
+	case TrackerTargetCategory::Breakables: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyBreakableTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No breakables found.") : _("No next breakable."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
+			targetId = lockedTargetId;
+		} else {
+			targetId = FindNearestBreakableObjectId(playerPosition);
+		}
+		if (!targetId)
+			return std::string(_("No breakables found."));
+
+		const Object &object = Objects[*targetId];
+		if (!IsTrackedBreakableObject(object)) {
+			lockedTargetId = -1;
+			targetId = FindNearestBreakableObjectId(playerPosition);
+			if (!targetId)
+				return std::string(_("No breakables found."));
+		}
+
+		lockedTargetId = *targetId;
+		const Object &tracked = Objects[*targetId];
+
+		targetName = tracked.name();
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = ObjectGoal(tracked);
+		}
+		break;
+	}
+	case TrackerTargetCategory::Monsters: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyMonsterTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No monsters found.") : _("No next monster."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < static_cast<int>(MaxMonsters)) {
+			targetId = lockedTargetId;
+		} else {
+			targetId = FindNearestMonsterId(playerPosition);
+		}
+		if (!targetId)
+			return std::string(_("No monsters found."));
+
+		const Monster &monster = Monsters[*targetId];
+		if (!IsTrackedMonster(monster)) {
+			lockedTargetId = -1;
+			targetId = FindNearestMonsterId(playerPosition);
+			if (!targetId)
+				return std::string(_("No monsters found."));
+		}
+
+		lockedTargetId = *targetId;
+		const Monster &tracked = Monsters[*targetId];
+
+		targetName = MonsterLabelForSpeech(tracked);
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = OccupiedTileGoal(tracked.position.tile);
+		}
+		break;
+	}
+	case TrackerTargetCategory::DeadBodies: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyCorpseTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No dead bodies found.") : _("No next dead body."));
+		} else if (IsCorpsePresent(lockedTargetId)) {
+			targetId = lockedTargetId;
+		} else {
+			targetId = FindNearestCorpseId(playerPosition);
+		}
+		if (!targetId)
+			return std::string(_("No dead bodies found."));
+
+		if (!IsCorpsePresent(*targetId)) {
+			lockedTargetId = -1;
+			return std::string(_("No dead bodies found."));
+		}
+
+		lockedTargetId = *targetId;
+		targetName = _("Dead body");
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = TileGoal(CorpsePositionForTrackerId(*targetId));
+		}
+		break;
+	}
+	case TrackerTargetCategory::Npcs: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectNpcTrackerCandidates(playerPosition);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No NPCs found.") : _("No next NPC."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < static_cast<int>(GetNumTowners())) {
+			targetId = lockedTargetId;
+		} else if (!nearbyCandidates.empty()) {
+			targetId = nearbyCandidates.front().id;
+		}
+		if (!targetId)
+			return std::string(_("No NPCs found."));
+
+		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
+		if (it == nearbyCandidates.end()) {
+			lockedTargetId = -1;
+			return std::string(_("No NPCs found."));
+		}
+
+		lockedTargetId = *targetId;
+		targetName = Towners[*targetId].name;
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = OccupiedTileGoal(Towners[*targetId].position);
+		}
+		break;
+	}
+	case TrackerTargetCategory::Players: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectPlayerTrackerCandidates(playerPosition);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No players found.") : _("No next player."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < MAX_PLRS) {
+			targetId = lockedTargetId;
+		} else if (!nearbyCandidates.empty()) {
+			targetId = nearbyCandidates.front().id;
+		}
+		if (!targetId)
+			return std::string(_("No players found."));
+
+		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
+		if (it == nearbyCandidates.end()) {
+			lockedTargetId = -1;
+			return std::string(_("No players found."));
+		}
+
+		lockedTargetId = *targetId;
+		targetName = Players[*targetId].name();
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = OccupiedTileGoal(Players[*targetId].position.future);
+		}
+		break;
+	}
+	case TrackerTargetCategory::DungeonEntrances: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectDungeonEntranceTrackerCandidates(playerPosition);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No dungeon entrances found.") : _("No next dungeon entrance."));
+		} else if (!nearbyCandidates.empty()) {
+			const auto lockedIt = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = lockedTargetId](const TrackerCandidate &c) { return c.id == id; });
+			targetId = lockedIt != nearbyCandidates.end() ? lockedTargetId : nearbyCandidates.front().id;
+		}
+		if (!targetId)
+			return std::string(_("No dungeon entrances found."));
+
+		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
+		if (it == nearbyCandidates.end()) {
+			lockedTargetId = -1;
+			return std::string(_("No dungeon entrances found."));
+		}
+
+		lockedTargetId = *targetId;
+		targetName = std::string(it->name.str());
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			if (IsRedPortalTrackerId(*targetId)) {
+				goal = TileGoal(RedPortalPositionForTrackerId(*targetId));
+			} else {
+				const TriggerStruct &trigger = trigs[*targetId];
+				goal = TileGoal(trigger.position);
+			}
+		}
+		break;
+	}
+	case TrackerTargetCategory::Stairs: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectStairsTrackerCandidates(playerPosition);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No stairs found.") : _("No next stairs."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < numtrigs) {
+			targetId = lockedTargetId;
+		} else if (!nearbyCandidates.empty()) {
+			targetId = nearbyCandidates.front().id;
+		}
+		if (!targetId)
+			return std::string(_("No stairs found."));
+
+		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
+		if (it == nearbyCandidates.end()) {
+			lockedTargetId = -1;
+			return std::string(_("No stairs found."));
+		}
+
+		lockedTargetId = *targetId;
+		targetName = std::string(it->name.str());
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			const TriggerStruct &trigger = trigs[*targetId];
+			goal = TileGoal(trigger.position);
+		}
+		break;
+	}
+	case TrackerTargetCategory::QuestLocations: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectQuestLocationTrackerCandidates(playerPosition);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No quest locations found.") : _("No next quest location."));
+		} else if (!nearbyCandidates.empty()) {
+			const auto lockedIt = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = lockedTargetId](const TrackerCandidate &c) { return c.id == id; });
+			targetId = lockedIt != nearbyCandidates.end() ? lockedTargetId : nearbyCandidates.front().id;
+		}
+		if (!targetId)
+			return std::string(_("No quest locations found."));
+
+		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
+		if (it == nearbyCandidates.end()) {
+			lockedTargetId = -1;
+			return std::string(_("No quest locations found."));
+		}
+
+		lockedTargetId = *targetId;
+		targetName = std::string(it->name.str());
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			if (IsQuestSpotTrackerId(*targetId)) {
+				const std::optional<QuestSpot> spot = FindQuestSpot(QuestSpotIdForTrackerId(*targetId));
+				if (!spot) {
+					lockedTargetId = -1;
+					return std::string(_("No quest locations found."));
+				}
+				if (IsQuestSpotInRange(*spot, playerPosition))
+					return std::string(QuestSpotInRangeMessage(*spot, *MyPlayer));
+				goal = QuestSpotGoal(*spot);
+			} else if (setlevel) {
+				if (IsRedPortalTrackerId(*targetId)) {
+					goal = TileGoal(RedPortalPositionForTrackerId(*targetId));
+				} else {
+					const TriggerStruct &trigger = trigs[*targetId];
+					goal = TileGoal(trigger.position);
+				}
+			} else {
+				const Quest &quest = Quests[static_cast<size_t>(*targetId)];
+				goal = TileGoal(quest.position);
+			}
+		}
+		break;
+	}
+	case TrackerTargetCategory::Portals: {
+		const std::vector<TrackerCandidate> nearbyCandidates = CollectPortalTrackerCandidates(playerPosition);
+		if (cycleTarget) {
+			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
+			if (!targetId)
+				return std::string(nearbyCandidates.empty() ? _("No portals found.") : _("No next portal."));
+		} else if (lockedTargetId >= 0 && lockedTargetId < MAXPORTAL) {
+			targetId = lockedTargetId;
+		} else if (!nearbyCandidates.empty()) {
+			targetId = nearbyCandidates.front().id;
+		}
+		if (!targetId)
+			return std::string(_("No portals found."));
+
+		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
+		if (it == nearbyCandidates.end()) {
+			lockedTargetId = -1;
+			return std::string(_("No portals found."));
+		}
+
+		Point portalPosition;
+		if (leveltype == DTYPE_TOWN) {
+			const std::optional<Point> townPos = FindTownPortalPositionInTownByPortalIndex(*targetId);
+			if (!townPos) {
+				lockedTargetId = -1;
+				return std::string(_("No portals found."));
+			}
+			portalPosition = *townPos;
+		} else {
+			if (!IsTownPortalOpenOnCurrentLevel(*targetId)) {
+				lockedTargetId = -1;
+				return std::string(_("No portals found."));
+			}
+			portalPosition = Portals[*targetId].position;
+		}
+
+		lockedTargetId = *targetId;
+		targetName = TownPortalLabelForSpeech(Portals[*targetId]);
+		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
+		if (!cycleTarget) {
+			goal = TileGoal(portalPosition);
+		}
+		break;
+	}
+	}
+
+	if (cycleTarget)
+		return std::string(targetName.str());
+
+	if (!goal)
+		return std::string(_("Can't find a path to the target."));
+
+	return DescribeRouteToTrackerTarget(*MyPlayer, playerPosition, *goal, targetName.str());
+}
+
 void NavigateToTrackerTargetKeyPressed()
 {
 	if (!CanPlayerTakeAction() || InGameMenu())
@@ -1697,749 +2288,15 @@ void NavigateToTrackerTargetKeyPressed()
 	const bool cycleTarget = (modState & SDL_KMOD_SHIFT) != 0;
 	const bool clearTarget = (modState & SDL_KMOD_CTRL) != 0;
 
-	const Point playerPosition = MyPlayer->position.future;
 	AutoWalkTrackerTargetId = -1;
 
-	int &lockedTargetId = LockedTrackerTargetId(SelectedTrackerTargetCategory);
 	if (clearTarget) {
-		lockedTargetId = -1;
+		LockedTrackerTargetId(SelectedTrackerTargetCategory) = -1;
 		SpeakText(_("Tracker target cleared."), true);
 		return;
 	}
 
-	std::optional<int> targetId;
-	std::optional<Point> targetPosition;
-	std::optional<Point> alternateTargetPosition;
-	StringOrView targetName;
-
-	switch (SelectedTrackerTargetCategory) {
-	case TrackerTargetCategory::Items: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyItemTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No items found."), true);
-				else
-					SpeakText(_("No next item."), true);
-				return;
-			}
-		} else if (IsGroundItemPresent(lockedTargetId)) {
-			targetId = lockedTargetId;
-		} else {
-			targetId = FindNearestGroundItemId(playerPosition);
-		}
-		if (!targetId) {
-			SpeakText(_("No items found."), true);
-			return;
-		}
-
-		if (!IsGroundItemPresent(*targetId)) {
-			lockedTargetId = -1;
-			SpeakText(_("No items found."), true);
-			return;
-		}
-
-		lockedTargetId = *targetId;
-		const Item &tracked = Items[*targetId];
-
-		targetName = tracked.getName();
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		targetPosition = tracked.position;
-		break;
-	}
-	case TrackerTargetCategory::Chests: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyChestTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No chests found."), true);
-				else
-					SpeakText(_("No next chest."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
-			targetId = lockedTargetId;
-		} else {
-			targetId = FindNearestUnopenedChestObjectId(playerPosition);
-		}
-		if (!targetId) {
-			SpeakText(_("No chests found."), true);
-			return;
-		}
-
-		const Object &object = Objects[*targetId];
-		if (!IsTrackedChestObject(object)) {
-			lockedTargetId = -1;
-			targetId = FindNearestUnopenedChestObjectId(playerPosition);
-			if (!targetId) {
-				SpeakText(_("No chests found."), true);
-				return;
-			}
-		}
-
-		lockedTargetId = *targetId;
-		const Object &tracked = Objects[*targetId];
-
-		targetName = tracked.name();
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = tracked.position;
-			if (FindObjectAtPosition(tracked.position + Direction::NorthEast) == &tracked)
-				alternateTargetPosition = tracked.position + Direction::NorthEast;
-		}
-		break;
-	}
-	case TrackerTargetCategory::Doors: {
-		std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyDoorTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
-		for (TrackerCandidate &c : nearbyCandidates) {
-			if (c.id < 0 || c.id >= MAXOBJECTS)
-				continue;
-			c.name = DoorLabelForSpeech(Objects[c.id]);
-		}
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No doors found."), true);
-				else
-					SpeakText(_("No next door."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
-			targetId = lockedTargetId;
-		} else {
-			targetId = FindNearestDoorObjectId(playerPosition);
-		}
-		if (!targetId) {
-			SpeakText(_("No doors found."), true);
-			return;
-		}
-
-		const Object &object = Objects[*targetId];
-		if (!IsTrackedDoorObject(object)) {
-			lockedTargetId = -1;
-			targetId = FindNearestDoorObjectId(playerPosition);
-			if (!targetId) {
-				SpeakText(_("No doors found."), true);
-				return;
-			}
-		}
-
-		lockedTargetId = *targetId;
-		const Object &tracked = Objects[*targetId];
-
-		targetName = DoorLabelForSpeech(tracked);
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = tracked.position;
-			if (FindObjectAtPosition(tracked.position + Direction::NorthEast) == &tracked)
-				alternateTargetPosition = tracked.position + Direction::NorthEast;
-		}
-		break;
-	}
-	case TrackerTargetCategory::Shrines: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyShrineTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No shrines found."), true);
-				else
-					SpeakText(_("No next shrine."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
-			targetId = lockedTargetId;
-		} else {
-			targetId = FindNearestShrineObjectId(playerPosition);
-		}
-		if (!targetId) {
-			SpeakText(_("No shrines found."), true);
-			return;
-		}
-
-		const Object &object = Objects[*targetId];
-		if (!IsShrineLikeObject(object)) {
-			lockedTargetId = -1;
-			targetId = FindNearestShrineObjectId(playerPosition);
-			if (!targetId) {
-				SpeakText(_("No shrines found."), true);
-				return;
-			}
-		}
-
-		lockedTargetId = *targetId;
-		const Object &tracked = Objects[*targetId];
-
-		targetName = tracked.name();
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = tracked.position;
-			if (FindObjectAtPosition(tracked.position + Direction::NorthEast) == &tracked)
-				alternateTargetPosition = tracked.position + Direction::NorthEast;
-		}
-		break;
-	}
-	case TrackerTargetCategory::Objects: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyObjectInteractableTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No objects found."), true);
-				else
-					SpeakText(_("No next object."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
-			targetId = lockedTargetId;
-		} else {
-			targetId = FindNearestMiscInteractableObjectId(playerPosition);
-		}
-		if (!targetId) {
-			SpeakText(_("No objects found."), true);
-			return;
-		}
-
-		const Object &object = Objects[*targetId];
-		if (!IsTrackedMiscInteractableObject(object)) {
-			lockedTargetId = -1;
-			targetId = FindNearestMiscInteractableObjectId(playerPosition);
-			if (!targetId) {
-				SpeakText(_("No objects found."), true);
-				return;
-			}
-		}
-
-		lockedTargetId = *targetId;
-		const Object &tracked = Objects[*targetId];
-
-		targetName = TrackerObjectLabelForSpeech(tracked);
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = tracked.position;
-			if (FindObjectAtPosition(tracked.position + Direction::NorthEast) == &tracked)
-				alternateTargetPosition = tracked.position + Direction::NorthEast;
-		}
-		break;
-	}
-	case TrackerTargetCategory::Breakables: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyBreakableTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No breakables found."), true);
-				else
-					SpeakText(_("No next breakable."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < MAXOBJECTS) {
-			targetId = lockedTargetId;
-		} else {
-			targetId = FindNearestBreakableObjectId(playerPosition);
-		}
-		if (!targetId) {
-			SpeakText(_("No breakables found."), true);
-			return;
-		}
-
-		const Object &object = Objects[*targetId];
-		if (!IsTrackedBreakableObject(object)) {
-			lockedTargetId = -1;
-			targetId = FindNearestBreakableObjectId(playerPosition);
-			if (!targetId) {
-				SpeakText(_("No breakables found."), true);
-				return;
-			}
-		}
-
-		lockedTargetId = *targetId;
-		const Object &tracked = Objects[*targetId];
-
-		targetName = tracked.name();
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = tracked.position;
-			if (FindObjectAtPosition(tracked.position + Direction::NorthEast) == &tracked)
-				alternateTargetPosition = tracked.position + Direction::NorthEast;
-		}
-		break;
-	}
-	case TrackerTargetCategory::Monsters: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyMonsterTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No monsters found."), true);
-				else
-					SpeakText(_("No next monster."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < static_cast<int>(MaxMonsters)) {
-			targetId = lockedTargetId;
-		} else {
-			targetId = FindNearestMonsterId(playerPosition);
-		}
-		if (!targetId) {
-			SpeakText(_("No monsters found."), true);
-			return;
-		}
-
-		const Monster &monster = Monsters[*targetId];
-		if (!IsTrackedMonster(monster)) {
-			lockedTargetId = -1;
-			targetId = FindNearestMonsterId(playerPosition);
-			if (!targetId) {
-				SpeakText(_("No monsters found."), true);
-				return;
-			}
-		}
-
-		lockedTargetId = *targetId;
-		const Monster &tracked = Monsters[*targetId];
-
-		targetName = MonsterLabelForSpeech(tracked);
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = tracked.position.tile;
-		}
-		break;
-	}
-	case TrackerTargetCategory::DeadBodies: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectNearbyCorpseTrackerCandidates(playerPosition, TrackerCycleDistanceTiles);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No dead bodies found."), true);
-				else
-					SpeakText(_("No next dead body."), true);
-				return;
-			}
-		} else if (IsCorpsePresent(lockedTargetId)) {
-			targetId = lockedTargetId;
-		} else {
-			targetId = FindNearestCorpseId(playerPosition);
-		}
-		if (!targetId) {
-			SpeakText(_("No dead bodies found."), true);
-			return;
-		}
-
-		if (!IsCorpsePresent(*targetId)) {
-			lockedTargetId = -1;
-			SpeakText(_("No dead bodies found."), true);
-			return;
-		}
-
-		lockedTargetId = *targetId;
-		targetName = _("Dead body");
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = CorpsePositionForTrackerId(*targetId);
-		}
-		break;
-	}
-	case TrackerTargetCategory::Npcs: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectNpcTrackerCandidates(playerPosition);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No NPCs found."), true);
-				else
-					SpeakText(_("No next NPC."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < static_cast<int>(GetNumTowners())) {
-			targetId = lockedTargetId;
-		} else if (!nearbyCandidates.empty()) {
-			targetId = nearbyCandidates.front().id;
-		}
-		if (!targetId) {
-			SpeakText(_("No NPCs found."), true);
-			return;
-		}
-
-		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
-		if (it == nearbyCandidates.end()) {
-			lockedTargetId = -1;
-			SpeakText(_("No NPCs found."), true);
-			return;
-		}
-
-		lockedTargetId = *targetId;
-		targetName = Towners[*targetId].name;
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = Towners[*targetId].position;
-		}
-		break;
-	}
-	case TrackerTargetCategory::Players: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectPlayerTrackerCandidates(playerPosition);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No players found."), true);
-				else
-					SpeakText(_("No next player."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < MAX_PLRS) {
-			targetId = lockedTargetId;
-		} else if (!nearbyCandidates.empty()) {
-			targetId = nearbyCandidates.front().id;
-		}
-		if (!targetId) {
-			SpeakText(_("No players found."), true);
-			return;
-		}
-
-		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
-		if (it == nearbyCandidates.end()) {
-			lockedTargetId = -1;
-			SpeakText(_("No players found."), true);
-			return;
-		}
-
-		lockedTargetId = *targetId;
-		targetName = Players[*targetId].name();
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = Players[*targetId].position.future;
-		}
-		break;
-	}
-	case TrackerTargetCategory::DungeonEntrances: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectDungeonEntranceTrackerCandidates(playerPosition);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No dungeon entrances found."), true);
-				else
-					SpeakText(_("No next dungeon entrance."), true);
-				return;
-			}
-		} else if (!nearbyCandidates.empty()) {
-			const auto lockedIt = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = lockedTargetId](const TrackerCandidate &c) { return c.id == id; });
-			targetId = lockedIt != nearbyCandidates.end() ? lockedTargetId : nearbyCandidates.front().id;
-		}
-		if (!targetId) {
-			SpeakText(_("No dungeon entrances found."), true);
-			return;
-		}
-
-		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
-		if (it == nearbyCandidates.end()) {
-			lockedTargetId = -1;
-			SpeakText(_("No dungeon entrances found."), true);
-			return;
-		}
-
-		lockedTargetId = *targetId;
-		targetName = std::string(it->name.str());
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			if (IsRedPortalTrackerId(*targetId)) {
-				targetPosition = RedPortalPositionForTrackerId(*targetId);
-			} else {
-				const TriggerStruct &trigger = trigs[*targetId];
-				targetPosition = Point { trigger.position.x, trigger.position.y };
-			}
-		}
-		break;
-	}
-	case TrackerTargetCategory::Stairs: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectStairsTrackerCandidates(playerPosition);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No stairs found."), true);
-				else
-					SpeakText(_("No next stairs."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < numtrigs) {
-			targetId = lockedTargetId;
-		} else if (!nearbyCandidates.empty()) {
-			targetId = nearbyCandidates.front().id;
-		}
-		if (!targetId) {
-			SpeakText(_("No stairs found."), true);
-			return;
-		}
-
-		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
-		if (it == nearbyCandidates.end()) {
-			lockedTargetId = -1;
-			SpeakText(_("No stairs found."), true);
-			return;
-		}
-
-		lockedTargetId = *targetId;
-		targetName = std::string(it->name.str());
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			const TriggerStruct &trigger = trigs[*targetId];
-			targetPosition = Point { trigger.position.x, trigger.position.y };
-		}
-		break;
-	}
-	case TrackerTargetCategory::QuestLocations: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectQuestLocationTrackerCandidates(playerPosition);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No quest locations found."), true);
-				else
-					SpeakText(_("No next quest location."), true);
-				return;
-			}
-		} else if (!nearbyCandidates.empty()) {
-			const auto lockedIt = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = lockedTargetId](const TrackerCandidate &c) { return c.id == id; });
-			targetId = lockedIt != nearbyCandidates.end() ? lockedTargetId : nearbyCandidates.front().id;
-		}
-		if (!targetId) {
-			SpeakText(_("No quest locations found."), true);
-			return;
-		}
-
-		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
-		if (it == nearbyCandidates.end()) {
-			lockedTargetId = -1;
-			SpeakText(_("No quest locations found."), true);
-			return;
-		}
-
-		lockedTargetId = *targetId;
-		targetName = std::string(it->name.str());
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			if (IsQuestSpotTrackerId(*targetId)) {
-				const std::optional<QuestSpot> spot = FindQuestSpot(QuestSpotIdForTrackerId(*targetId));
-				if (!spot) {
-					lockedTargetId = -1;
-					SpeakText(_("No quest locations found."), true);
-					return;
-				}
-				if (IsQuestSpotInRange(*spot, playerPosition)) {
-					SpeakText(QuestSpotInRangeMessage(*spot, *MyPlayer), true);
-					return;
-				}
-				targetPosition = FindQuestSpotApproachTile(*MyPlayer, playerPosition, *spot).value_or(spot->position);
-			} else if (setlevel) {
-				if (IsRedPortalTrackerId(*targetId)) {
-					targetPosition = RedPortalPositionForTrackerId(*targetId);
-				} else {
-					const TriggerStruct &trigger = trigs[*targetId];
-					targetPosition = Point { trigger.position.x, trigger.position.y };
-				}
-			} else {
-				const Quest &quest = Quests[static_cast<size_t>(*targetId)];
-				targetPosition = quest.position;
-			}
-		}
-		break;
-	}
-	case TrackerTargetCategory::Portals: {
-		const std::vector<TrackerCandidate> nearbyCandidates = CollectPortalTrackerCandidates(playerPosition);
-		if (cycleTarget) {
-			targetId = FindNextTrackerCandidateId(nearbyCandidates, lockedTargetId);
-			if (!targetId) {
-				if (nearbyCandidates.empty())
-					SpeakText(_("No portals found."), true);
-				else
-					SpeakText(_("No next portal."), true);
-				return;
-			}
-		} else if (lockedTargetId >= 0 && lockedTargetId < MAXPORTAL) {
-			targetId = lockedTargetId;
-		} else if (!nearbyCandidates.empty()) {
-			targetId = nearbyCandidates.front().id;
-		}
-		if (!targetId) {
-			SpeakText(_("No portals found."), true);
-			return;
-		}
-
-		const auto it = std::find_if(nearbyCandidates.begin(), nearbyCandidates.end(), [id = *targetId](const TrackerCandidate &c) { return c.id == id; });
-		if (it == nearbyCandidates.end()) {
-			lockedTargetId = -1;
-			SpeakText(_("No portals found."), true);
-			return;
-		}
-
-		Point portalPosition;
-		if (leveltype == DTYPE_TOWN) {
-			const std::optional<Point> townPos = FindTownPortalPositionInTownByPortalIndex(*targetId);
-			if (!townPos) {
-				lockedTargetId = -1;
-				SpeakText(_("No portals found."), true);
-				return;
-			}
-			portalPosition = *townPos;
-		} else {
-			if (!IsTownPortalOpenOnCurrentLevel(*targetId)) {
-				lockedTargetId = -1;
-				SpeakText(_("No portals found."), true);
-				return;
-			}
-			portalPosition = Portals[*targetId].position;
-		}
-
-		lockedTargetId = *targetId;
-		targetName = TownPortalLabelForSpeech(Portals[*targetId]);
-		DecorateTrackerTargetNameWithOrdinalIfNeeded(*targetId, targetName, nearbyCandidates);
-		if (!cycleTarget) {
-			targetPosition = portalPosition;
-		}
-		break;
-	}
-	}
-
-	if (cycleTarget) {
-		SpeakText(targetName.str(), /*force=*/true);
-		return;
-	}
-
-	if (!targetPosition) {
-		SpeakText(_("Can't find a nearby tile to walk to."), true);
-		return;
-	}
-
-	Point chosenTargetPosition = *targetPosition;
-	enum class TrackerPathMode : uint8_t {
-		RespectDoorsAndMonsters,
-		IgnoreDoors,
-		IgnoreMonsters,
-		IgnoreDoorsAndMonsters,
-		Lenient,
-	};
-
-	auto findPathToTarget = [&](Point destination, TrackerPathMode mode) -> std::optional<std::vector<int8_t>> {
-		const bool allowDestinationNonWalkable = !PosOkPlayer(*MyPlayer, destination);
-		switch (mode) {
-		case TrackerPathMode::RespectDoorsAndMonsters:
-			return FindKeyboardWalkPathForSpeechRespectingDoors(*MyPlayer, playerPosition, destination, allowDestinationNonWalkable);
-		case TrackerPathMode::IgnoreDoors:
-			return FindKeyboardWalkPathForSpeech(*MyPlayer, playerPosition, destination, allowDestinationNonWalkable);
-		case TrackerPathMode::IgnoreMonsters:
-			return FindKeyboardWalkPathForSpeechRespectingDoorsIgnoringMonsters(*MyPlayer, playerPosition, destination, allowDestinationNonWalkable);
-		case TrackerPathMode::IgnoreDoorsAndMonsters:
-			return FindKeyboardWalkPathForSpeechIgnoringMonsters(*MyPlayer, playerPosition, destination, allowDestinationNonWalkable);
-		case TrackerPathMode::Lenient:
-			return FindKeyboardWalkPathForSpeechLenient(*MyPlayer, playerPosition, destination, allowDestinationNonWalkable);
-		default:
-			return std::nullopt;
-		}
-	};
-
-	std::optional<std::vector<int8_t>> spokenPath;
-	bool pathIgnoresDoors = false;
-	bool pathIgnoresMonsters = false;
-	bool pathIgnoresBreakables = false;
-
-	const auto considerDestination = [&](Point destination, TrackerPathMode mode) {
-		const std::optional<std::vector<int8_t>> candidate = findPathToTarget(destination, mode);
-		if (!candidate)
-			return;
-		if (!spokenPath || candidate->size() < spokenPath->size()) {
-			spokenPath = *candidate;
-			chosenTargetPosition = destination;
-
-			pathIgnoresDoors = mode == TrackerPathMode::IgnoreDoors || mode == TrackerPathMode::IgnoreDoorsAndMonsters || mode == TrackerPathMode::Lenient;
-			pathIgnoresMonsters = mode == TrackerPathMode::IgnoreMonsters || mode == TrackerPathMode::IgnoreDoorsAndMonsters || mode == TrackerPathMode::Lenient;
-			pathIgnoresBreakables = mode == TrackerPathMode::Lenient;
-		}
-	};
-
-	considerDestination(*targetPosition, TrackerPathMode::RespectDoorsAndMonsters);
-	if (alternateTargetPosition)
-		considerDestination(*alternateTargetPosition, TrackerPathMode::RespectDoorsAndMonsters);
-
-	if (!spokenPath) {
-		considerDestination(*targetPosition, TrackerPathMode::IgnoreDoors);
-		if (alternateTargetPosition)
-			considerDestination(*alternateTargetPosition, TrackerPathMode::IgnoreDoors);
-	}
-
-	if (!spokenPath) {
-		considerDestination(*targetPosition, TrackerPathMode::IgnoreMonsters);
-		if (alternateTargetPosition)
-			considerDestination(*alternateTargetPosition, TrackerPathMode::IgnoreMonsters);
-	}
-
-	if (!spokenPath) {
-		considerDestination(*targetPosition, TrackerPathMode::IgnoreDoorsAndMonsters);
-		if (alternateTargetPosition)
-			considerDestination(*alternateTargetPosition, TrackerPathMode::IgnoreDoorsAndMonsters);
-	}
-
-	if (!spokenPath) {
-		considerDestination(*targetPosition, TrackerPathMode::Lenient);
-		if (alternateTargetPosition)
-			considerDestination(*alternateTargetPosition, TrackerPathMode::Lenient);
-	}
-
-	bool showUnreachableWarning = false;
-	if (!spokenPath) {
-		showUnreachableWarning = true;
-		Point closestPosition;
-		spokenPath = FindKeyboardWalkPathToClosestReachableForSpeech(*MyPlayer, playerPosition, chosenTargetPosition, closestPosition);
-		pathIgnoresDoors = true;
-		pathIgnoresMonsters = false;
-		pathIgnoresBreakables = false;
-	}
-
-	if (spokenPath && !showUnreachableWarning && !PosOkPlayer(*MyPlayer, chosenTargetPosition)) {
-		if (!spokenPath->empty())
-			spokenPath->pop_back();
-	}
-
-	if (spokenPath && (pathIgnoresDoors || pathIgnoresMonsters || pathIgnoresBreakables)) {
-		const std::optional<TrackerPathBlockInfo> block = FindFirstTrackerPathBlock(playerPosition, spokenPath->data(), spokenPath->size(), pathIgnoresDoors, pathIgnoresMonsters, pathIgnoresBreakables, chosenTargetPosition);
-		if (block) {
-			if (playerPosition.WalkingDistance(block->blockPosition) <= TrackerInteractDistanceTiles) {
-				switch (block->type) {
-				case TrackerPathBlockType::Door:
-					SpeakText(_("A door is blocking the path. Open it and try again."), true);
-					return;
-				case TrackerPathBlockType::Monster:
-					SpeakText(_("A monster is blocking the path. Clear it and try again."), true);
-					return;
-				case TrackerPathBlockType::Breakable:
-					SpeakText(_("A breakable object is blocking the path. Destroy it and try again."), true);
-					return;
-				}
-			}
-
-			spokenPath = std::vector<int8_t>(spokenPath->begin(), spokenPath->begin() + block->stepIndex);
-		}
-	}
-
-	std::string message;
-	if (!targetName.empty())
-		StrAppend(message, targetName, "\n");
-	if (showUnreachableWarning) {
-		message.append(_("Can't find a path to the target."));
-		if (spokenPath && !spokenPath->empty())
-			message.append("\n");
-	}
-	if (spokenPath) {
-		if (!showUnreachableWarning || !spokenPath->empty())
-			AppendKeyboardWalkPathForSpeech(message, *spokenPath);
-	}
-
-	SpeakText(message, true);
+	SpeakText(DescribeSelectedTrackerTarget(cycleTarget), true);
 }
 
 void AutoWalkToTrackerTargetKeyPressed()
@@ -2607,16 +2464,12 @@ void AutoWalkToTrackerTargetKeyPressed()
 			return;
 		}
 
-		if (lockedTargetId >= 0 && lockedTargetId < numtrigs) {
-			const auto it = std::find_if(candidates.begin(), candidates.end(), [id = lockedTargetId](const TrackerCandidate &c) { return c.id == id; });
-			if (it != candidates.end())
-				targetId = lockedTargetId;
-		}
-		if (!targetId)
-			targetId = candidates.front().id;
-
-		lockedTargetId = *targetId;
-		targetName = TriggerLabelForSpeech(trigs[*targetId]);
+		// Red portals have negative ids and no trigger, so the name comes from the list.
+		const auto locked = std::find_if(candidates.begin(), candidates.end(), [id = lockedTargetId](const TrackerCandidate &c) { return c.id == id; });
+		const TrackerCandidate &chosen = locked != candidates.end() ? *locked : candidates.front();
+		targetId = chosen.id;
+		lockedTargetId = chosen.id;
+		targetName = std::string(chosen.name.str());
 		break;
 	}
 	case TrackerTargetCategory::Stairs: {
@@ -2689,7 +2542,178 @@ void AutoWalkToTrackerTargetKeyPressed()
 
 	AutoWalkTrackerTargetId = *targetId;
 	AutoWalkTrackerTargetCategory = SelectedTrackerTargetCategory;
+	AutoWalkTrackerStarting = true;
 	UpdateAutoWalkTracker();
+}
+
+/**
+ * One step of Shift+Home's walk to a target: where to send the player next, or why the walk ends.
+ * `starting` is set for the first step, where a target walked onto that is a step away is in range.
+ */
+AutoWalkStep PlanAutoWalkStep(const Player &myPlayer, TrackerTargetCategory category, int targetId, bool starting)
+{
+	const Point playerPosition = myPlayer.position.future;
+
+	std::optional<TrackerGoal> goal;
+	std::string inRangeMessage;
+
+	switch (category) {
+	case TrackerTargetCategory::Items:
+		if (!IsGroundItemPresent(targetId))
+			return StopAutoWalk(_("Target item is gone."));
+		goal = TileGoal(Items[targetId].position);
+		inRangeMessage = _("Item in range.");
+		break;
+	case TrackerTargetCategory::Chests:
+		if (!IsTrackedObjectPresent(targetId, IsTrackedChestObject))
+			return StopAutoWalk(_("Target chest is gone."));
+		goal = ObjectGoal(Objects[targetId]);
+		inRangeMessage = _("Chest in range.");
+		break;
+	case TrackerTargetCategory::Doors:
+		if (!IsTrackedObjectPresent(targetId, IsTrackedDoorObject))
+			return StopAutoWalk(_("Target door is gone."));
+		goal = ObjectGoal(Objects[targetId]);
+		inRangeMessage = _("Door in range.");
+		break;
+	case TrackerTargetCategory::Shrines:
+		if (!IsTrackedObjectPresent(targetId, IsShrineLikeObject))
+			return StopAutoWalk(_("Target shrine is gone."));
+		goal = ObjectGoal(Objects[targetId]);
+		inRangeMessage = _("Shrine in range.");
+		break;
+	case TrackerTargetCategory::Objects:
+		if (!IsTrackedObjectPresent(targetId, IsTrackedMiscInteractableObject))
+			return StopAutoWalk(_("Target object is gone."));
+		goal = ObjectGoal(Objects[targetId]);
+		inRangeMessage = _("Object in range.");
+		break;
+	case TrackerTargetCategory::Breakables:
+		if (!IsTrackedObjectPresent(targetId, IsTrackedBreakableObject))
+			return StopAutoWalk(_("Target breakable is gone."));
+		goal = ObjectGoal(Objects[targetId]);
+		inRangeMessage = _("Breakable in range.");
+		break;
+	case TrackerTargetCategory::Monsters:
+		if (targetId < 0 || targetId >= static_cast<int>(MaxMonsters) || !IsTrackedMonster(Monsters[targetId]))
+			return StopAutoWalk(_("Target monster is gone."));
+		goal = OccupiedTileGoal(Monsters[targetId].position.tile);
+		inRangeMessage = _("Monster in range.");
+		break;
+	case TrackerTargetCategory::DeadBodies:
+		if (!IsCorpsePresent(targetId))
+			return StopAutoWalk(_("Target dead body is gone."));
+		goal = TileGoal(CorpsePositionForTrackerId(targetId));
+		inRangeMessage = _("Dead body in range.");
+		break;
+	case TrackerTargetCategory::Npcs:
+		if (leveltype != DTYPE_TOWN || targetId < 0 || targetId >= static_cast<int>(GetNumTowners()) || !IsTownerPresent(Towners[targetId]._ttype))
+			return StopAutoWalk(_("Target NPC is gone."));
+		goal = OccupiedTileGoal(Towners[targetId].position);
+		inRangeMessage = _("NPC in range.");
+		break;
+	case TrackerTargetCategory::Players: {
+		if (targetId < 0 || targetId >= MAX_PLRS)
+			return StopAutoWalk(_("Target player is gone."));
+		const Player &player = Players[targetId];
+		if (!player.plractive || player._pLvlChanging || player.plrIsOnSetLevel != setlevel || player.plrlevel != myPlayer.plrlevel || !InDungeonBounds(player.position.future))
+			return StopAutoWalk(_("Target player is gone."));
+		goal = OccupiedTileGoal(player.position.future);
+		inRangeMessage = _("Player in range.");
+		break;
+	}
+	case TrackerTargetCategory::DungeonEntrances: {
+		if (IsRedPortalTrackerId(targetId)) {
+			const Point portalPosition = RedPortalPositionForTrackerId(targetId);
+			if (!setlevel || !IsRedPortalAt(portalPosition))
+				return StopAutoWalk(_("Target entrance is gone."));
+			goal = TileGoal(portalPosition);
+		} else {
+			if (targetId >= numtrigs)
+				return StopAutoWalk(_("Target entrance is gone."));
+			const TriggerStruct &trigger = trigs[targetId];
+			const bool valid = leveltype == DTYPE_TOWN
+			    ? IsAnyOf(trigger._tmsg, WM_DIABNEXTLVL, WM_DIABTOWNWARP)
+			    : (setlevel ? trigger._tmsg == WM_DIABRTNLVL : IsAnyOf(trigger._tmsg, WM_DIABPREVLVL, WM_DIABTWARPUP));
+			if (!valid)
+				return StopAutoWalk(_("Target entrance is gone."));
+			goal = TileGoal(trigger.position);
+		}
+		inRangeMessage = _("Entrance in range.");
+		break;
+	}
+	case TrackerTargetCategory::Stairs: {
+		if (leveltype == DTYPE_TOWN || targetId < 0 || targetId >= numtrigs || !IsAnyOf(trigs[targetId]._tmsg, WM_DIABNEXTLVL, WM_DIABPREVLVL, WM_DIABTWARPUP))
+			return StopAutoWalk(_("Target stairs are gone."));
+		goal = TileGoal(trigs[targetId].position);
+		inRangeMessage = _("Stairs in range.");
+		break;
+	}
+	case TrackerTargetCategory::QuestLocations: {
+		if (IsQuestSpotTrackerId(targetId)) {
+			const std::optional<QuestSpot> spot = FindQuestSpot(QuestSpotIdForTrackerId(targetId));
+			if (!spot)
+				return StopAutoWalk(_("Target quest location is gone."));
+			goal = QuestSpotGoal(*spot);
+			inRangeMessage = QuestSpotInRangeMessage(*spot, myPlayer);
+			break;
+		}
+		if (setlevel) {
+			if (IsRedPortalTrackerId(targetId)) {
+				const Point portalPosition = RedPortalPositionForTrackerId(targetId);
+				if (!IsRedPortalAt(portalPosition))
+					return StopAutoWalk(_("Target quest location is gone."));
+				goal = TileGoal(portalPosition);
+			} else {
+				if (leveltype == DTYPE_TOWN || targetId >= numtrigs || trigs[targetId]._tmsg != WM_DIABRTNLVL)
+					return StopAutoWalk(_("Target quest location is gone."));
+				goal = TileGoal(trigs[targetId].position);
+			}
+			inRangeMessage = _("Quest exit in range.");
+			break;
+		}
+
+		if (targetId < 0 || targetId >= static_cast<int>(sizeof(Quests) / sizeof(Quests[0])))
+			return StopAutoWalk(_("Target quest location is gone."));
+		const Quest &quest = Quests[static_cast<size_t>(targetId)];
+		if (quest._qslvl == SL_NONE || quest._qactive == QUEST_NOTAVAIL || quest._qlevel != currlevel || !InDungeonBounds(quest.position))
+			return StopAutoWalk(_("Target quest location is gone."));
+		goal = TileGoal(quest.position);
+		inRangeMessage = _("Quest entrance in range.");
+		break;
+	}
+	case TrackerTargetCategory::Portals: {
+		std::optional<Point> portalPosition;
+		if (leveltype == DTYPE_TOWN) {
+			portalPosition = FindTownPortalPositionInTownByPortalIndex(targetId);
+		} else if (IsTownPortalOpenOnCurrentLevel(targetId)) {
+			portalPosition = Portals[targetId].position;
+		}
+		if (!portalPosition)
+			return StopAutoWalk(_("Target portal is gone."));
+		goal = TileGoal(*portalPosition);
+		inRangeMessage = _("Portal in range.");
+		break;
+	}
+	}
+
+	if (!goal)
+		return StopAutoWalk(_("Can't find a path to the target."));
+	if (goal->IsReachedFrom(playerPosition) || (starting && goal->IsOneStepFrom(playerPosition)))
+		return StopAutoWalk(inRangeMessage);
+
+	std::optional<TrackerRoute> route = FindTrackerRoute(myPlayer, playerPosition, goal->position, [&goal](Point tile) { return goal->IsReachedFrom(tile); }, /*preferAxisSteps=*/false);
+	if (!route)
+		return StopAutoWalk(_("Can't find a path to the target."));
+
+	const std::optional<TrackerPathBlockInfo> block = StopRouteAtFirstBlock(*route, playerPosition);
+	if (block && (route->path.empty() || playerPosition.WalkingDistance(block->blockPosition) <= TrackerInteractDistanceTiles))
+		return StopAutoWalk(TrackerPathBlockMessage(block->type));
+
+	const std::optional<Point> waypoint = ChooseAutoWalkWaypoint(myPlayer, playerPosition, route->path);
+	if (!waypoint)
+		return StopAutoWalk(_("Can't find a path to the target."));
+	return WalkTo(*waypoint);
 }
 
 } // namespace
@@ -2722,318 +2746,14 @@ void UpdateAutoWalkTracker()
 	if (MyPlayer->destAction != ACTION_NONE)
 		return;
 
-	Player &myPlayer = *MyPlayer;
-	const Point playerPosition = myPlayer.position.future;
-
-	std::optional<Point> destination;
-
-	switch (AutoWalkTrackerTargetCategory) {
-	case TrackerTargetCategory::Items: {
-		const int itemId = AutoWalkTrackerTargetId;
-		if (itemId < 0 || itemId > MAXITEMS) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target item is gone."), true);
-			return;
-		}
-		if (!IsGroundItemPresent(itemId)) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target item is gone."), true);
-			return;
-		}
-		const Item &item = Items[itemId];
-		if (playerPosition.WalkingDistance(item.position) <= TrackerInteractDistanceTiles) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Item in range."), true);
-			return;
-		}
-		destination = item.position;
-		break;
-	}
-	case TrackerTargetCategory::Chests:
-		if (!ValidateAutoWalkObjectTarget(myPlayer, playerPosition,
-		        IsTrackedChestObject, N_("Target chest is gone."), N_("Chest in range."), destination))
-			return;
-		break;
-	case TrackerTargetCategory::Doors:
-		if (!ValidateAutoWalkObjectTarget(myPlayer, playerPosition, IsTrackedDoorObject, N_("Target door is gone."), N_("Door in range."), destination))
-			return;
-		break;
-	case TrackerTargetCategory::Shrines:
-		if (!ValidateAutoWalkObjectTarget(myPlayer, playerPosition, IsShrineLikeObject, N_("Target shrine is gone."), N_("Shrine in range."), destination))
-			return;
-		break;
-	case TrackerTargetCategory::Objects:
-		if (!ValidateAutoWalkObjectTarget(myPlayer, playerPosition, IsTrackedMiscInteractableObject, N_("Target object is gone."), N_("Object in range."), destination))
-			return;
-		break;
-	case TrackerTargetCategory::Breakables:
-		if (!ValidateAutoWalkObjectTarget(myPlayer, playerPosition, IsTrackedBreakableObject, N_("Target breakable is gone."), N_("Breakable in range."), destination))
-			return;
-		break;
-	case TrackerTargetCategory::Monsters: {
-		const int monsterId = AutoWalkTrackerTargetId;
-		if (monsterId < 0 || monsterId >= static_cast<int>(MaxMonsters)) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target monster is gone."), true);
-			return;
-		}
-		const Monster &monster = Monsters[monsterId];
-		if (!IsTrackedMonster(monster)) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target monster is gone."), true);
-			return;
-		}
-		const Point monsterPosition { monster.position.tile };
-		if (playerPosition.WalkingDistance(monsterPosition) <= TrackerInteractDistanceTiles) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Monster in range."), true);
-			return;
-		}
-		destination = FindBestAdjacentApproachTile(myPlayer, playerPosition, monsterPosition);
-		break;
-	}
-	case TrackerTargetCategory::DeadBodies: {
-		const int corpseId = AutoWalkTrackerTargetId;
-		if (!IsCorpsePresent(corpseId)) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target dead body is gone."), true);
-			return;
-		}
-
-		const Point corpsePosition = CorpsePositionForTrackerId(corpseId);
-		if (playerPosition.WalkingDistance(corpsePosition) <= TrackerInteractDistanceTiles) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Dead body in range."), true);
-			return;
-		}
-
-		destination = corpsePosition;
-		break;
-	}
-	case TrackerTargetCategory::Npcs: {
-		const int npcId = AutoWalkTrackerTargetId;
-		if (leveltype != DTYPE_TOWN || npcId < 0 || npcId >= static_cast<int>(GetNumTowners())) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target NPC is gone."), true);
-			return;
-		}
-		const Towner &towner = Towners[npcId];
-		if (!IsTownerPresent(towner._ttype)) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target NPC is gone."), true);
-			return;
-		}
-		if (playerPosition.WalkingDistance(towner.position) <= TrackerInteractDistanceTiles) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("NPC in range."), true);
-			return;
-		}
-		destination = FindBestAdjacentApproachTile(myPlayer, playerPosition, towner.position);
-		break;
-	}
-	case TrackerTargetCategory::Players: {
-		const int playerId = AutoWalkTrackerTargetId;
-		if (playerId < 0 || playerId >= MAX_PLRS) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target player is gone."), true);
-			return;
-		}
-		const Player &player = Players[playerId];
-		if (!player.plractive || player._pLvlChanging || player.plrIsOnSetLevel != setlevel || player.plrlevel != MyPlayer->plrlevel) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target player is gone."), true);
-			return;
-		}
-		const Point targetPosition = player.position.future;
-		if (!InDungeonBounds(targetPosition)) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target player is gone."), true);
-			return;
-		}
-		if (playerPosition.WalkingDistance(targetPosition) <= TrackerInteractDistanceTiles) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Player in range."), true);
-			return;
-		}
-		destination = FindBestAdjacentApproachTile(myPlayer, playerPosition, targetPosition);
-		break;
-	}
-	case TrackerTargetCategory::DungeonEntrances: {
-		const int triggerIndex = AutoWalkTrackerTargetId;
-		if (triggerIndex < 0 || triggerIndex >= numtrigs) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target entrance is gone."), true);
-			return;
-		}
-		const TriggerStruct &trigger = trigs[triggerIndex];
-		const bool valid = leveltype == DTYPE_TOWN
-		    ? IsAnyOf(trigger._tmsg, WM_DIABNEXTLVL, WM_DIABTOWNWARP)
-		    : (setlevel ? trigger._tmsg == WM_DIABRTNLVL : IsAnyOf(trigger._tmsg, WM_DIABPREVLVL, WM_DIABTWARPUP));
-		if (!valid) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target entrance is gone."), true);
-			return;
-		}
-		const Point triggerPosition { trigger.position.x, trigger.position.y };
-		if (playerPosition.WalkingDistance(triggerPosition) <= TrackerInteractDistanceTiles) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Entrance in range."), true);
-			return;
-		}
-		destination = triggerPosition;
-		break;
-	}
-	case TrackerTargetCategory::Stairs: {
-		const int triggerIndex = AutoWalkTrackerTargetId;
-		if (leveltype == DTYPE_TOWN || triggerIndex < 0 || triggerIndex >= numtrigs) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target stairs are gone."), true);
-			return;
-		}
-		const TriggerStruct &trigger = trigs[triggerIndex];
-		if (!IsAnyOf(trigger._tmsg, WM_DIABNEXTLVL, WM_DIABPREVLVL, WM_DIABTWARPUP)) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target stairs are gone."), true);
-			return;
-		}
-		const Point triggerPosition { trigger.position.x, trigger.position.y };
-		if (playerPosition.WalkingDistance(triggerPosition) <= TrackerInteractDistanceTiles) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Stairs in range."), true);
-			return;
-		}
-		destination = triggerPosition;
-		break;
-	}
-	case TrackerTargetCategory::QuestLocations: {
-		if (IsQuestSpotTrackerId(AutoWalkTrackerTargetId)) {
-			const std::optional<QuestSpot> spot = FindQuestSpot(QuestSpotIdForTrackerId(AutoWalkTrackerTargetId));
-			if (!spot) {
-				AutoWalkTrackerTargetId = -1;
-				SpeakText(_("Target quest location is gone."), true);
-				return;
-			}
-			if (IsQuestSpotInRange(*spot, playerPosition)) {
-				AutoWalkTrackerTargetId = -1;
-				SpeakText(QuestSpotInRangeMessage(*spot, myPlayer), true);
-				return;
-			}
-			destination = FindQuestSpotApproachTile(myPlayer, playerPosition, *spot);
-			break;
-		}
-		if (setlevel) {
-			const int triggerIndex = AutoWalkTrackerTargetId;
-			if (leveltype == DTYPE_TOWN || triggerIndex < 0 || triggerIndex >= numtrigs) {
-				AutoWalkTrackerTargetId = -1;
-				SpeakText(_("Target quest location is gone."), true);
-				return;
-			}
-			const TriggerStruct &trigger = trigs[triggerIndex];
-			if (trigger._tmsg != WM_DIABRTNLVL) {
-				AutoWalkTrackerTargetId = -1;
-				SpeakText(_("Target quest location is gone."), true);
-				return;
-			}
-			const Point triggerPosition { trigger.position.x, trigger.position.y };
-			if (playerPosition.WalkingDistance(triggerPosition) <= TrackerInteractDistanceTiles) {
-				AutoWalkTrackerTargetId = -1;
-				SpeakText(_("Quest exit in range."), true);
-				return;
-			}
-			destination = triggerPosition;
-			break;
-		}
-
-		const int questIndex = AutoWalkTrackerTargetId;
-		if (questIndex < 0 || questIndex >= static_cast<int>(sizeof(Quests) / sizeof(Quests[0]))) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target quest location is gone."), true);
-			return;
-		}
-		const Quest &quest = Quests[static_cast<size_t>(questIndex)];
-		if (quest._qslvl == SL_NONE || quest._qactive == QUEST_NOTAVAIL || quest._qlevel != currlevel || !InDungeonBounds(quest.position)) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target quest location is gone."), true);
-			return;
-		}
-		if (playerPosition.WalkingDistance(quest.position) <= TrackerInteractDistanceTiles) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Quest entrance in range."), true);
-			return;
-		}
-		destination = quest.position;
-		break;
-	}
-	case TrackerTargetCategory::Portals: {
-		const int portalIndex = AutoWalkTrackerTargetId;
-		std::optional<Point> portalPosition;
-		if (leveltype == DTYPE_TOWN) {
-			portalPosition = FindTownPortalPositionInTownByPortalIndex(portalIndex);
-		} else if (IsTownPortalOpenOnCurrentLevel(portalIndex)) {
-			portalPosition = Portals[portalIndex].position;
-		}
-
-		if (!portalPosition) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Target portal is gone."), true);
-			return;
-		}
-		if (playerPosition.WalkingDistance(*portalPosition) <= TrackerInteractDistanceTiles) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Portal in range."), true);
-			return;
-		}
-		destination = *portalPosition;
-		break;
-	}
-	}
-
-	if (!destination) {
+	const AutoWalkStep step = PlanAutoWalkStep(*MyPlayer, AutoWalkTrackerTargetCategory, AutoWalkTrackerTargetId, AutoWalkTrackerStarting);
+	AutoWalkTrackerStarting = false;
+	if (!step.walkTo) {
 		AutoWalkTrackerTargetId = -1;
-		SpeakText(_("Can't find a nearby tile to walk to."), true);
+		SpeakText(step.stopMessage, true);
 		return;
 	}
-
-	constexpr size_t MaxAutoWalkPathLength = 512;
-	std::array<int8_t, MaxAutoWalkPathLength> path;
-	path.fill(WALK_NONE);
-
-	int steps = FindPath(CanStep, [&myPlayer](Point position) { return PosOkPlayer(myPlayer, position); }, playerPosition, *destination, path.data(), path.size());
-	if (steps == 0) {
-		std::array<int8_t, MaxAutoWalkPathLength> ignoreDoorPath;
-		ignoreDoorPath.fill(WALK_NONE);
-
-		const int ignoreDoorSteps = FindPath(CanStep, [&myPlayer](Point position) { return PosOkPlayerIgnoreDoors(myPlayer, position); }, playerPosition, *destination, ignoreDoorPath.data(), ignoreDoorPath.size());
-		if (ignoreDoorSteps != 0) {
-			const std::optional<DoorBlockInfo> block = FindFirstClosedDoorOnWalkPath(playerPosition, ignoreDoorPath.data(), ignoreDoorSteps);
-			if (block) {
-				if (playerPosition.WalkingDistance(block->doorPosition) <= TrackerInteractDistanceTiles) {
-					AutoWalkTrackerTargetId = -1;
-					SpeakText(_("A door is blocking the path. Open it and try again."), true);
-					return;
-				}
-
-				*destination = block->beforeDoor;
-				path.fill(WALK_NONE);
-				steps = FindPath(CanStep, [&myPlayer](Point position) { return PosOkPlayer(myPlayer, position); }, playerPosition, *destination, path.data(), path.size());
-			}
-		}
-
-		if (steps == 0) {
-			AutoWalkTrackerTargetId = -1;
-			SpeakText(_("Can't find a path to the target."), true);
-			return;
-		}
-	}
-
-	if (steps < static_cast<int>(MaxPathLengthPlayer)) {
-		NetSendCmdLoc(MyPlayerId, true, CMD_WALKXY, *destination);
-		return;
-	}
-
-	const int segmentSteps = std::min(steps - 1, static_cast<int>(MaxPathLengthPlayer - 1));
-	const Point waypoint = PositionAfterWalkPathSteps(playerPosition, path.data(), segmentSteps);
-	NetSendCmdLoc(MyPlayerId, true, CMD_WALKXY, waypoint);
+	NetSendCmdLoc(MyPlayerId, true, CMD_WALKXY, *step.walkTo);
 }
 
 void TrackerPageUpKeyPressed()
@@ -3095,5 +2815,33 @@ void ResetAutoWalkTracker()
 {
 	AutoWalkTrackerTargetId = -1;
 }
+
+#ifdef BUILD_TESTING
+std::vector<TrackerTargetForTesting> ListTrackerTargetsForTesting()
+{
+	std::vector<TrackerTargetForTesting> targets;
+	const Point playerPosition = MyPlayer->position.future;
+	for (const TrackerTargetCategory category : TrackerTargetCategoriesForCurrentLevel()) {
+		for (const TrackerCandidate &candidate : CollectTrackerCandidatesForSelection(category, playerPosition))
+			targets.push_back({ category, candidate.id, std::string(candidate.name.str()) });
+	}
+	return targets;
+}
+
+std::string DescribeTrackerTargetForTesting(TrackerTargetCategory category, int id)
+{
+	EnsureTrackerLocksMatchCurrentLevel();
+	SelectedTrackerTargetCategory = category;
+	LockedTrackerTargetId(category) = id;
+	return DescribeSelectedTrackerTarget(/*cycleTarget=*/false);
+}
+
+std::optional<Point> PlanAutoWalkStepForTesting(TrackerTargetCategory category, int id, bool starting, std::string &stopMessage)
+{
+	AutoWalkStep step = PlanAutoWalkStep(*MyPlayer, category, id, starting);
+	stopMessage = std::move(step.stopMessage);
+	return step.walkTo;
+}
+#endif
 
 } // namespace devilution

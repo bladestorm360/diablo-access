@@ -910,6 +910,12 @@ if(DEVILUTIONX_SCREENSHOT_FORMAT STREQUAL DEVILUTIONX_SCREENSHOT_FORMAT_PNG)
   endif()
 endif()
 
+if(BUILD_TESTING)
+  list(APPEND libdevilutionx_SRCS
+    controls/tracker_audit.cpp
+  )
+endif()
+
 add_devilutionx_object_library(libdevilutionx ${libdevilutionx_SRCS})
 target_include_directories(libdevilutionx PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 target_link_dependencies(libdevilutionx PUBLIC

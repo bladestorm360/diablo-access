@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include <function_ref.hpp>
+
 #include "engine/displacement.hpp"
 #include "engine/point.hpp"
 
@@ -31,11 +33,14 @@ bool PosOkPlayerIgnoreDoorsMonstersAndBreakables(const Player &player, Point pos
 
 // BFS pathfinding for speech
 std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeech(const Player &player, Point startPosition, Point destinationPosition, bool allowDestinationNonWalkable = false);
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechRespectingDoors(const Player &player, Point startPosition, Point destinationPosition, bool allowDestinationNonWalkable = false);
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechIgnoringMonsters(const Player &player, Point startPosition, Point destinationPosition, bool allowDestinationNonWalkable = false);
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechRespectingDoorsIgnoringMonsters(const Player &player, Point startPosition, Point destinationPosition, bool allowDestinationNonWalkable = false);
-std::optional<std::vector<int8_t>> FindKeyboardWalkPathForSpeechLenient(const Player &player, Point startPosition, Point destinationPosition, bool allowDestinationNonWalkable = false);
 std::optional<std::vector<int8_t>> FindKeyboardWalkPathToClosestReachableForSpeech(const Player &player, Point startPosition, Point destinationPosition, Point &closestPosition);
+
+/**
+ * Shortest walk from `startPosition` to the nearest tile where `isGoal` holds, over tiles `posOk`
+ * accepts. With `preferAxisSteps` a route of axis steps alone wins when there is one, as spoken
+ * directions want. Steps head for `heading` when routes are equally long.
+ */
+std::optional<std::vector<int8_t>> FindWalkPathToGoal(const Player &player, Point startPosition, Point heading, tl::function_ref<bool(Point)> isGoal, bool (*posOk)(const Player &, Point), bool preferAxisSteps);
 
 // Speech formatting
 void AppendKeyboardWalkPathForSpeech(std::string &message, const std::vector<int8_t> &path);

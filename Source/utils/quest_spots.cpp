@@ -21,7 +21,6 @@
 #include "quests.h"
 #include "utils/language.h"
 #include "utils/str_cat.hpp"
-#include "utils/walk_path_speech.hpp"
 
 namespace devilution {
 
@@ -162,40 +161,6 @@ std::string QuestSpotInRangeHint(const QuestSpot &spot, const Player &player)
 std::string QuestSpotInRangeMessage(const QuestSpot &spot, const Player &player)
 {
 	return StrCat(QuestSpotLabel(spot.id), ", ", _("in range."), " ", QuestSpotInRangeHint(spot, player));
-}
-
-std::optional<Point> FindQuestSpotApproachTile(const Player &player, Point from, const QuestSpot &spot)
-{
-	if (IsQuestSpotInRange(spot, from))
-		return from;
-
-	std::optional<Point> best;
-	size_t bestPathLength = 0;
-	std::optional<Point> fallback;
-	int fallbackDistance = 0;
-
-	const Rectangle &area = spot.area;
-	for (int y = area.position.y - 1; y <= area.position.y + area.size.height; ++y) {
-		for (int x = area.position.x - 1; x <= area.position.x + area.size.width; ++x) {
-			const Point tile { x, y };
-			if (!InDungeonBounds(tile) || !IsQuestSpotInRange(spot, tile) || !PosOkPlayer(player, tile))
-				continue;
-
-			const int distance = from.WalkingDistance(tile);
-			if (!fallback || distance < fallbackDistance) {
-				fallback = tile;
-				fallbackDistance = distance;
-			}
-
-			const std::optional<std::vector<int8_t>> path = FindKeyboardWalkPathForSpeech(player, from, tile);
-			if (path && (!best || path->size() < bestPathLength)) {
-				best = tile;
-				bestPathLength = path->size();
-			}
-		}
-	}
-
-	return best ? best : fallback;
 }
 
 } // namespace devilution
