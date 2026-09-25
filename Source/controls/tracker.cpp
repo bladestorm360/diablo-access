@@ -927,13 +927,17 @@ template <typename Predicate>
 		return result;
 	}
 
+	// Mirrors CheckQuests(): set-level entrances do nothing with multiplayer quests, and Lazarus' only
+	// once his red portal has opened.
 	constexpr size_t NumQuests = sizeof(Quests) / sizeof(Quests[0]);
 	result.reserve(NumQuests);
-	for (size_t questIndex = 0; questIndex < NumQuests; ++questIndex) {
+	for (size_t questIndex = 0; questIndex < NumQuests && !UseMultiplayerQuests(); ++questIndex) {
 		const Quest &quest = Quests[questIndex];
 		if (quest._qslvl == SL_NONE)
 			continue;
 		if (quest._qactive == QUEST_NOTAVAIL)
+			continue;
+		if (quest._qidx == Q_BETRAYER && quest._qvar1 < 3)
 			continue;
 		if (quest._qlevel != currlevel)
 			continue;

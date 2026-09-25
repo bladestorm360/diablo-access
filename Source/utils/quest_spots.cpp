@@ -67,10 +67,17 @@ std::vector<QuestSpot> CollectQuestSpots()
 	if (MyPlayer == nullptr || !gbIsHellfire || setlevel)
 		return spots;
 
+	// Each spot is listed only while the player is on its quest, not merely while it exists.
 	if (leveltype == DTYPE_TOWN) {
-		if (!IsWarpOpen(DTYPE_NEST))
+		const Player &player = *MyPlayer;
+		// The farmer (or Complete Nut, in the cow quest) sets his quest active when he hands over the bomb.
+		if (!IsWarpOpen(DTYPE_NEST)
+		    && (IsCarrying(player, IDI_RUNEBOMB) || Quests[Q_FARMER]._qactive == QUEST_ACTIVE || Quests[Q_JERSEY]._qactive == QUEST_ACTIVE))
 			spots.push_back({ QuestSpotId::HiveGrowth, HiveGrowthArea, HiveEntrance });
-		if (!IsWarpOpen(DTYPE_CRYPT))
+		// Grave Matters turns active by itself on Hell 4, long before the map drops from the Defiler, so
+		// it counts from picking the map up (_qvar1) or Gillian's hint about it (_qlog).
+		if (!IsWarpOpen(DTYPE_CRYPT)
+		    && (IsCarrying(player, IDI_MAPOFDOOM) || Quests[Q_GRAVE]._qvar1 == 1 || Quests[Q_GRAVE]._qlog))
 			spots.push_back({ QuestSpotId::CryptGrave, CryptGraveArea, CryptEntrance });
 		return spots;
 	}
@@ -79,12 +86,15 @@ std::vector<QuestSpot> CollectQuestSpots()
 		return spots;
 
 	// SyncNakrulRoom() replaces these four tiles when the chamber opens.
+	// The game starts the Na-Krul quest on the way down (Hive 4), so this shows whenever he is still sealed in.
 	if (currlevel == 24 && UberRow > 0 && UberCol > 2 && !IsUberRoomOpened && !IsUberLeverActivated
-	    && Quests[Q_NAKRUL]._qactive != QUEST_DONE) {
+	    && Quests[Q_NAKRUL]._qactive == QUEST_ACTIVE) {
 		spots.push_back({ QuestSpotId::NaKrulDoor, Rectangle { { UberRow, UberCol - 2 }, { 1, 4 } }, Point { UberRow, UberCol } });
 	}
 
-	if (CornerStone.isAvailable() && InDungeonBounds(CornerStone.position) && CornerStone.position != Point { 0, 0 })
+	// The Cornerstone quest has no start; it counts once the player has seen the stone.
+	if (CornerStone.isAvailable() && InDungeonBounds(CornerStone.position) && CornerStone.position != Point { 0, 0 }
+	    && HasAnyOf(dFlags[CornerStone.position.x][CornerStone.position.y], DungeonFlag::Explored))
 		spots.push_back({ QuestSpotId::Cornerstone, Rectangle { CornerStone.position, { 1, 1 } }, CornerStone.position });
 
 	return spots;
