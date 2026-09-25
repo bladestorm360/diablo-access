@@ -61,13 +61,34 @@ void PerformPrimaryAction();
 void PerformSecondaryAction();
 
 // Like PerformPrimaryAction but auto-selects a nearby target for keyboard-only play.
+// Auto-repeats of the key are ignored while it is held: UpdateActionKeyHolds takes over.
 void PerformPrimaryActionAutoTarget();
 
 // Like PerformSecondaryAction but auto-selects a nearby target for keyboard-only play.
+// Acts once per press: auto-repeats of the key are ignored.
 void PerformSecondaryActionAutoTarget();
 
 // Like PerformSpellAction but auto-selects a nearby target for keyboard-only play.
+// Auto-repeats of the key are ignored while it is held: UpdateActionKeyHolds takes over.
 void PerformSpellActionAutoTarget();
+
+// The key bound to the matching auto-target action was released.
+void ReleasePrimaryActionAutoTarget();
+void ReleaseSecondaryActionAutoTarget();
+void ReleaseSpellActionAutoTarget();
+
+// Runs once per game tick. While the primary action or spell key is held in a dungeon, keeps
+// attacking or casting at the monster the press chose, following it when attacking, and moves on
+// to the next nearest, naming it, once that monster dies, leaves sight or cannot be reached. A melee
+// attack turns first to any monster already in reach.
+void UpdateActionKeyHolds();
+
+// Stops held primary action and spell keys from fighting until they are pressed again.
+void StopActionKeyHolds();
+
+// Whether a held primary action or spell key is locked on this monster.
+bool IsActionKeyHoldTarget(int monsterId);
+
 void UpdateSpellTarget(SpellID spell);
 bool TryDropItem();
 void InvalidateInventorySlot();

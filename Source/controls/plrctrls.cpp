@@ -22,6 +22,7 @@
 
 #include "automap.h"
 #include "control/control.hpp"
+#include "controls/accessibility_keys.hpp"
 #include "controls/controller_motion.h"
 #ifndef USE_SDL1
 #include "controls/devices/game_controller.h"
@@ -50,9 +51,11 @@
 #include "panels/ui_panels.hpp"
 #include "qol/chatlog.h"
 #include "qol/stash.h"
+#include "spells.h"
 #include "stores.h"
 #include "towners.h"
 #include "track.h"
+#include "utils/accessibility_announcements.hpp"
 #include "utils/format_int.hpp"
 #include "utils/is_of.hpp"
 #include "utils/language.h"
@@ -2400,15 +2403,324 @@ void UpdateTargetsForKeyboardAction()
 	FindTrigger();
 }
 
+/*
+ * The A, D and W keys act once per press: while one is held, its auto-repeat is ignored. Every
+ * repeat used to search for a target again, so among moving monsters the target flipped between
+ * them and the player turned back and forth without landing a hit, and a door beside the player
+ * opened and shut. Holding A or W in a dungeon fights one monster at a time instead. The press picks
+ * the nearest monster, and while the key stays down the player keeps attacking it, following it
+ * when it moves, or keeps casting at it. The hold moves on to the next nearest only when that
+ * monster dies, leaves sight or can no longer be reached, and names each monster it moves to. A
+ * melee attack also turns to a monster already in reach rather than walk past it to the one it
+ * follows: that one would get free hits in the meantime.
+ */
+struct ActionKeyHold {
+	/** The keymapper action whose key this is. */
+	std::string_view action;
+	bool held = false;
+	/** The press attacked or cast in a dungeon, so holding the key goes on doing it. */
+	bool fights = false;
+	int lockedMonster = -1;
+	int lockLevel = 0;
+	/** A held cast was refused and the reason spoken. The hold waits quietly until the spell can be cast. */
+	bool castRefused = false;
+};
+
+ActionKeyHold PrimaryActionHold { .action = "PrimaryAction" };
+ActionKeyHold SecondaryActionHold { .action = "SecondaryAction" };
+ActionKeyHold SpellActionHold { .action = "SpellAction" };
+
+/** The monster last named as a new target, so pressing again at the same one stays quiet. */
+int AnnouncedTarget = -1;
+int AnnouncedTargetLevel = 0;
+
+/** Tells levels apart, so a lock never carries over into another level's monster list. */
+int CurrentLevelKey()
+{
+	return setlevel ? -1 - static_cast<int>(setlvlnum) : currlevel;
+}
+
+/**
+ * Whether the key bound to an action is known to be up. Catches a release the keymapper never
+ * passed on, such as one made while a menu was open. Mouse buttons are not checked: their release
+ * event is trusted.
+ */
+bool IsKeymapperActionKeyUp(std::string_view actionName)
+{
+	uint32_t key = GetOptions().Keymapper.KeyForAction(actionName);
+	if (key == SDLK_UNKNOWN || (key & KeymapperMouseButtonMask) != 0)
+		return false;
+	if (key >= 'A' && key <= 'Z')
+		key += 'a' - 'A'; // The keymapper stores letters in upper case, SDL key codes are lower case.
+#ifdef USE_SDL1
+	return false;
+#else
+#ifdef USE_SDL3
+	const SDL_Scancode scancode = SDL_GetScancodeFromKey(key, nullptr);
+#else
+	const SDL_Scancode scancode = SDL_GetScancodeFromKey(static_cast<SDL_Keycode>(key));
+#endif
+	return scancode != SDL_SCANCODE_UNKNOWN && !SDLC_GetKeyState()[scancode];
+#endif
+}
+
+void ReleaseHold(ActionKeyHold &hold)
+{
+	hold.held = false;
+	hold.fights = false;
+	hold.lockedMonster = -1;
+}
+
+/** Points the hold at a monster, or at none with -1, and names a monster newly chosen. */
+void LockHold(ActionKeyHold &hold, int monsterId)
+{
+	// A monster waiting to talk gets one press, not a conversation restarted every swing.
+	if (monsterId != -1 && CanTalkToMonst(Monsters[monsterId]))
+		monsterId = -1;
+	hold.lockedMonster = monsterId;
+	hold.lockLevel = CurrentLevelKey();
+	if (monsterId == -1 || (monsterId == AnnouncedTarget && AnnouncedTargetLevel == hold.lockLevel))
+		return;
+	AnnouncedTarget = monsterId;
+	AnnouncedTargetLevel = hold.lockLevel;
+	SpeakTargetMonster(monsterId);
+}
+
+/** Whether the hold's monster is still one to fight. Lets go of it otherwise. */
+bool KeepLock(ActionKeyHold &hold, bool (*canKeep)(int monsterId))
+{
+	if (hold.lockedMonster == -1)
+		return false;
+	if (hold.lockLevel == CurrentLevelKey() && canKeep(hold.lockedMonster))
+		return true;
+	// Its slot can go to a monster summoned later, which has to be named again.
+	if (hold.lockedMonster == AnnouncedTarget && Monsters[hold.lockedMonster].hasNoLife())
+		AnnouncedTarget = -1;
+	hold.lockedMonster = -1;
+	return false;
+}
+
+/**
+ * Whether a melee swing reaches the monster from where the player stands, or will stand once the
+ * current step ends. The engine checks the same pair of positions before it swings at the end of a step.
+ */
+bool IsInMeleeReach(const Monster &monster)
+{
+	return MyPlayer->position.future.WalkingDistance(monster.position.future) <= 1;
+}
+
+/** Whether PerformPrimaryAction would go to Interact, rather than to the spell list, inventory or stat buttons. */
+bool PrimaryActionFights()
+{
+	return !SpellSelectFlag && !invflag && !(CharFlag && !CharPanelButtonActive && MyPlayer->_pStatPts > 0);
+}
+
+/**
+ * Whether PerformSpellAction would cast the selected spell at a monster, rather than work a panel.
+ * Teleport and Town Portal aim at a tile, and the others left out need a player or an object.
+ */
+bool SpellActionFights()
+{
+	const SpellID spell = MyPlayer->_pRSpell;
+	return !SpellSelectFlag && !QuestLogIsOpen && !invflag && IsValidSpell(spell)
+	    && IsNoneOf(spell, SpellID::Teleport, SpellID::TownPortal, SpellID::Resurrect, SpellID::HealOther, SpellID::TrapDisarm);
+}
+
+/** Whether the selected spell can be cast now, checked without the voice line CheckPlrSpell plays when it cannot. */
+bool CanCastSelectedSpell()
+{
+	Player &myPlayer = *MyPlayer;
+	const SpellID spell = myPlayer._pRSpell;
+	switch (myPlayer._pRSplType) {
+	case SpellType::Skill:
+	case SpellType::Spell:
+		return CheckSpell(myPlayer, spell, myPlayer._pRSplType, false) == SpellCheckResult::Success;
+	case SpellType::Scroll:
+		return CanUseScroll(myPlayer, spell);
+	case SpellType::Charges:
+		return CanUseStaff(myPlayer, spell);
+	default:
+		return false;
+	}
+}
+
+/**
+ * The nearest monster the weapon can hit, or -1: by walking distance for melee, straight-line
+ * distance for a bow. FindActor goes by straight-line distance whenever a targeted spell is
+ * selected, which sends a melee attack at a monster behind a wall.
+ */
+int FindPrimaryActionMonster()
+{
+	pcursmonst = -1;
+	if (MyPlayer->UsesRangedWeapon())
+		FindRangedTarget();
+	else
+		FindMeleeTarget();
+	return pcursmonst;
+}
+
+/** The nearest monster for the selected spell, or -1, chosen as a press of the spell key chooses it. */
+int FindSpellActionMonster()
+{
+	pcursmonst = -1;
+	CheckMonstersNearby();
+	return pcursmonst;
+}
+
+/** Whether a held attack should go on at this monster. */
+bool CanKeepAttacking(int monsterId)
+{
+	const Monster &monster = Monsters[monsterId];
+	if (!CanTargetMonster(monster) || CanTalkToMonst(monster))
+		return false;
+
+	const Player &myPlayer = *MyPlayer;
+	if (myPlayer.UsesRangedWeapon() || IsInMeleeReach(monster) || IsStandingGround())
+		return true;
+
+	int8_t path[MaxPathLengthPlayer];
+	return FindPath(CanStep, [&myPlayer](Point position) { return PosOkPlayer(myPlayer, position); }, myPlayer.position.future, monster.position.future, path, MaxPathLengthPlayer) != 0;
+}
+
+/** Whether a held cast should go on at this monster. Spells need no path. */
+bool CanKeepCasting(int monsterId)
+{
+	const Monster &monster = Monsters[monsterId];
+	return CanTargetMonster(monster) && !CanTalkToMonst(monster);
+}
+
+/** Whether a held key may act this tick: in a dungeon, with nothing open. */
+bool CanHoldAct()
+{
+	if (leveltype == DTYPE_TOWN || ControlMode != ControlTypes::KeyboardAndMouse || IsPointAndClick())
+		return false;
+	if (!CanPlayerTakeAction() || InGameMenu() || DoomFlag || pcurs != CURSOR_HAND)
+		return false;
+	return !MyPlayer->_pInvincible;
+}
+
+/**
+ * Attacks the held A key's monster once more. `idle` means the player is done with the last swing
+ * or chase, as the engine's own held-mouse attack waits; otherwise the player is on the way to the
+ * monster, and only a change of monster needs a new order. Returns whether it gave one.
+ */
+bool ContinueHeldAttack(bool idle)
+{
+	ActionKeyHold &hold = PrimaryActionHold;
+	if (!hold.fights || !PrimaryActionFights())
+		return false;
+
+	const int previous = hold.lockedMonster;
+	if (!KeepLock(hold, CanKeepAttacking)) {
+		LockHold(hold, FindPrimaryActionMonster());
+	} else if (!MyPlayer->UsesRangedWeapon() && !IsInMeleeReach(Monsters[hold.lockedMonster])) {
+		// The search goes by walking distance, so it returns a monster in reach whenever there is one.
+		const int neighbour = FindPrimaryActionMonster();
+		if (neighbour != -1 && IsInMeleeReach(Monsters[neighbour]))
+			LockHold(hold, neighbour);
+	}
+	if (!idle && hold.lockedMonster == previous)
+		return false;
+
+	// Standing ground still swings with no monster in reach, as each press does.
+	if (hold.lockedMonster == -1 && !IsStandingGround())
+		return false;
+	pcursmonst = hold.lockedMonster;
+	Interact();
+	return true;
+}
+
+/** Casts the held W key's spell at its monster once more. Returns whether it cast. */
+bool ContinueHeldCast()
+{
+	ActionKeyHold &hold = SpellActionHold;
+	if (!hold.fights || !SpellActionFights())
+		return false;
+
+	if (!KeepLock(hold, CanKeepCasting))
+		LockHold(hold, FindSpellActionMonster());
+	if (hold.lockedMonster == -1)
+		return false;
+
+	const bool castable = CanCastSelectedSpell();
+	// The reason was spoken once already: wait quietly, for mana to come back for instance.
+	if (!castable && hold.castRefused)
+		return false;
+	hold.castRefused = !castable;
+
+	PlayerUnderCursor = nullptr;
+	pcursmonst = hold.lockedMonster;
+	UpdateSpellTarget(MyPlayer->_pRSpell);
+	CheckPlrSpell(false);
+	return castable;
+}
+
 } // namespace
 
 void PerformPrimaryActionAutoTarget()
 {
+	if (PrimaryActionHold.held)
+		return; // Auto-repeat of the held key: UpdateActionKeyHolds carries on the attack.
+
 	CancelAutoWalk();
-	if (ControlMode == ControlTypes::KeyboardAndMouse && !IsPointAndClick()) {
+	const bool keyboardTargeting = ControlMode == ControlTypes::KeyboardAndMouse && !IsPointAndClick();
+	if (keyboardTargeting) {
 		UpdateTargetsForKeyboardAction();
+		if (leveltype != DTYPE_TOWN && pcursmonst != -1)
+			FindPrimaryActionMonster();
 	}
+	const bool fights = keyboardTargeting && leveltype != DTYPE_TOWN && PrimaryActionFights();
 	PerformPrimaryAction();
+
+	PrimaryActionHold.held = true;
+	PrimaryActionHold.fights = fights;
+	LockHold(PrimaryActionHold, fights ? pcursmonst : -1);
+}
+
+void ReleasePrimaryActionAutoTarget()
+{
+	ReleaseHold(PrimaryActionHold);
+}
+
+void ReleaseSecondaryActionAutoTarget()
+{
+	ReleaseHold(SecondaryActionHold);
+}
+
+void ReleaseSpellActionAutoTarget()
+{
+	ReleaseHold(SpellActionHold);
+}
+
+void StopActionKeyHolds()
+{
+	for (ActionKeyHold *hold : { &PrimaryActionHold, &SpellActionHold }) {
+		hold->fights = false;
+		hold->lockedMonster = -1;
+	}
+}
+
+bool IsActionKeyHoldTarget(int monsterId)
+{
+	return monsterId != -1 && (PrimaryActionHold.lockedMonster == monsterId || SpellActionHold.lockedMonster == monsterId);
+}
+
+void UpdateActionKeyHolds()
+{
+	for (ActionKeyHold *hold : { &PrimaryActionHold, &SecondaryActionHold, &SpellActionHold }) {
+		if (hold->held && IsKeymapperActionKeyUp(hold->action))
+			ReleaseHold(*hold);
+	}
+
+	if (!CanHoldAct())
+		return;
+	Player &myPlayer = *MyPlayer;
+	const bool idle = myPlayer.destAction == ACTION_NONE && myPlayer.CanChangeAction();
+	const bool chasing = myPlayer.destAction == ACTION_ATTACKMON;
+	if (PrimaryActionHold.held && (idle || chasing) && ContinueHeldAttack(idle))
+		return;
+	if (SpellActionHold.held && idle)
+		ContinueHeldCast();
 }
 
 void PerformPrimaryAction()
@@ -2610,20 +2922,35 @@ void CtrlUseStashItem()
 
 void PerformSecondaryActionAutoTarget()
 {
+	if (SecondaryActionHold.held)
+		return; // Auto-repeat of the held key: one pickup, door or chest per press.
+
 	CancelAutoWalk();
 	if (ControlMode == ControlTypes::KeyboardAndMouse && !IsPointAndClick()) {
 		UpdateTargetsForKeyboardAction();
 	}
 	PerformSecondaryAction();
+	SecondaryActionHold.held = true;
 }
 
 void PerformSpellActionAutoTarget()
 {
+	if (SpellActionHold.held)
+		return; // Auto-repeat of the held key: UpdateActionKeyHolds carries on casting.
+
 	CancelAutoWalk();
-	if (ControlMode == ControlTypes::KeyboardAndMouse && !IsPointAndClick()) {
+	const bool keyboardTargeting = ControlMode == ControlTypes::KeyboardAndMouse && !IsPointAndClick();
+	if (keyboardTargeting) {
 		UpdateTargetsForKeyboardAction();
 	}
+	const bool fights = keyboardTargeting && leveltype != DTYPE_TOWN && SpellActionFights();
 	PerformSpellAction();
+
+	SpellActionHold.held = true;
+	SpellActionHold.fights = fights;
+	// A press refused for lack of mana has already said so.
+	SpellActionHold.castRefused = fights && !CanCastSelectedSpell();
+	LockHold(SpellActionHold, fights ? pcursmonst : -1);
 }
 
 void PerformSecondaryAction()

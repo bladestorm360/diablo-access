@@ -33,9 +33,10 @@ Keybinds are configurable, but these are the defaults most players will use:
 ## Keyboard controls
 
 - Arrow keys - walk one tile (north/south/east/west).
-- `A` - primary action (attack / talk / lift items).
-- `D` - secondary action (open chests / doors / pick up items).
-- `W` - spell action (cast active spell).
+- `A` - primary action (attack / talk / lift items). Hold to keep attacking the nearest monster, following it when it moves; a monster already in reach is fought first. Each new target is named.
+- `D` - secondary action (open chests / doors / pick up items). Once per press.
+- `W` - spell action (cast active spell). Hold to keep casting at the nearest monster.
+- `Ctrl`+`R` - run to the stairs up, steering around monsters (press again to cancel). `R` alone still sorts the inventory.
 
 ## Town NPCs
 

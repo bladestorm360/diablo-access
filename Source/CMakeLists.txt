@@ -47,6 +47,7 @@ set(libdevilutionx_SRCS
   controls/controller.cpp
   controls/devices/joystick.cpp
   controls/devices/kbcontroller.cpp
+  controls/escape_to_stairs.cpp
   controls/game_controls.cpp
   controls/keymapper.cpp
   controls/menu_controls.cpp

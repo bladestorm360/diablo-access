@@ -40,6 +40,7 @@
 #include "DiabloUI/diabloui.h"
 #include "controls/accessibility_keys.hpp"
 #include "controls/control_mode.hpp"
+#include "controls/escape_to_stairs.hpp"
 #include "controls/keymapper.hpp"
 #include "controls/plrctrls.h"
 #include "controls/remap_keyboard.h"
@@ -1622,6 +1623,8 @@ void GameLogic()
 		gGameLogicStep = GameLogicStep::ProcessPlayers;
 		ProcessPlayers();
 		UpdateAutoWalkTracker();
+		UpdateEscapeToStairs();
+		UpdateActionKeyHolds();
 		UpdateLowDurabilityWarnings();
 	}
 	if (leveltype != DTYPE_TOWN) {
@@ -1761,6 +1764,7 @@ const auto OptionChangeHandlerLanguage = (GetOptions().Language.code.SetValueCha
 void CancelAutoWalkInternal()
 {
 	ResetAutoWalkTracker();
+	StopEscapeToStairs();
 }
 
 } // namespace
@@ -2006,7 +2010,7 @@ void InitKeymapActions()
 	    N_("Attack monsters, talk to towners, lift and place inventory items."),
 	    'A',
 	    PerformPrimaryActionAutoTarget,
-	    nullptr,
+	    ReleasePrimaryActionAutoTarget,
 	    []() { return CanPlayerTakeAction() && !InGameMenu(); });
 	options.Keymapper.AddAction(
 	    "SecondaryAction",
@@ -2014,7 +2018,7 @@ void InitKeymapActions()
 	    N_("Open chests, interact with doors, pick up items."),
 	    'D',
 	    PerformSecondaryActionAutoTarget,
-	    nullptr,
+	    ReleaseSecondaryActionAutoTarget,
 	    []() { return CanPlayerTakeAction() && !InGameMenu(); });
 	options.Keymapper.AddAction(
 	    "SpellAction",
@@ -2022,7 +2026,7 @@ void InitKeymapActions()
 	    N_("Cast the active spell."),
 	    'W',
 	    PerformSpellActionAutoTarget,
-	    nullptr,
+	    ReleaseSpellActionAutoTarget,
 	    []() { return CanPlayerTakeAction() && !InGameMenu(); });
 
 	options.Keymapper.AddAction(
@@ -2219,10 +2223,13 @@ void InitKeymapActions()
 	options.Keymapper.AddAction(
 	    "SortInv",
 	    N_("Sort Inventory"),
-	    N_("Sorts the inventory."),
+	    N_("Sorts the inventory. Ctrl+R: run to the stairs up, away from monsters."),
 	    'R',
 	    [] {
-		    ReorganizeInventory(*MyPlayer);
+		    if ((SDL_GetModState() & SDL_KMOD_CTRL) != 0)
+			    EscapeToStairsKeyPressed();
+		    else
+			    ReorganizeInventory(*MyPlayer);
 	    });
 #ifdef _DEBUG
 	options.Keymapper.AddAction(

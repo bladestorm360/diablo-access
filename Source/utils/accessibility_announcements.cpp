@@ -163,6 +163,9 @@ namespace {
 	return monster.isUnique() || monster.ai == MonsterAIID::Diablo;
 }
 
+/** The monster next to the player and faced that was named last, while there is one. */
+std::optional<int> LastAttackableMonsterId;
+
 } // namespace
 
 void UpdateLowDurabilityWarnings()
@@ -308,8 +311,6 @@ void UpdateBossHealthAnnouncements()
 
 void UpdateAttackableMonsterAnnouncements()
 {
-	static std::optional<int> LastAttackableMonsterId;
-
 	if (MyPlayer == nullptr) {
 		LastAttackableMonsterId = std::nullopt;
 		return;
@@ -375,7 +376,22 @@ void UpdateAttackableMonsterAnnouncements()
 
 	LastAttackableMonsterId = *bestId;
 
+	// A held attack or spell key named it when it locked on.
+	if (IsActionKeyHoldTarget(*bestId))
+		return;
+
 	const StringOrView label = MonsterLabelForSpeech(Monsters[*bestId]);
+	if (!label.empty())
+		SpeakText(label.str(), /*force=*/true);
+}
+
+void SpeakTargetMonster(int monsterId)
+{
+	// Already named as the monster next to the player.
+	if (LastAttackableMonsterId && *LastAttackableMonsterId == monsterId)
+		return;
+
+	const StringOrView label = MonsterLabelForSpeech(Monsters[monsterId]);
 	if (!label.empty())
 		SpeakText(label.str(), /*force=*/true);
 }

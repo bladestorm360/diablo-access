@@ -25,6 +25,7 @@
 #include "appfat.h"
 #include "automap.h"
 #include "controls/accessibility_keys.hpp"
+#include "controls/escape_to_stairs.hpp"
 #include "controls/plrctrls.h"
 #include "diablo.h"
 #include "engine/path.h"
@@ -2627,6 +2628,7 @@ void AutoWalkToTrackerTargetKeyPressed()
 	StrAppend(msg, _("Going to: "), targetName);
 	SpeakText(msg, true);
 
+	StopEscapeToStairs();
 	AutoWalkTrackerTargetId = *targetId;
 	AutoWalkTrackerTargetCategory = SelectedTrackerTargetCategory;
 	UpdateAutoWalkTracker();
