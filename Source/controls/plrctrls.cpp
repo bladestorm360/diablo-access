@@ -1148,8 +1148,25 @@ int FindClosestInventorySlot(
 			checkCandidateSlot(SLOTXY_AMULET);
 		}
 	}
-	for (int i = SLOTXY_INV_FIRST; i <= SLOTXY_INV_LAST; i++) {
-		checkCandidateSlot(i);
+	if (heldItem.isEmpty()) {
+		for (int i = SLOTXY_INV_FIRST; i <= SLOTXY_INV_LAST; i++) {
+			checkCandidateSlot(i);
+		}
+	} else {
+		// Moves put the pointer at the centre of a held item rather than the centre of its top-left
+		// cell (see InventoryMove), so measure from that point, and only offer top-left cells where
+		// the item fits. Otherwise a tall item snaps to its middle row and drifts on every key press.
+		const Size heldSize = GetInventorySize(heldItem);
+		const Displacement toTopLeftCell { (heldSize.width - 1) * InventorySlotSizeInPixels.width / 2, (heldSize.height - 1) * InventorySlotSizeInPixels.height / 2 };
+		for (int i = SLOTXY_INV_FIRST; i <= SLOTXY_INV_LAST; i++) {
+			if (GetSlotColumn(i) + heldSize.width > INV_ROW_SLOT_SIZE || GetSlotRow(i) + heldSize.height > 4)
+				continue;
+			const int distance = distanceFunction(mousePos - toTopLeftCell, i);
+			if (distance < shortestDistance) {
+				shortestDistance = distance;
+				bestSlot = i;
+			}
+		}
 	}
 
 	// Also check belt slots
@@ -1160,13 +1177,20 @@ int FindClosestInventorySlot(
 	return bestSlot;
 }
 
-Point FindClosestStashSlot(Point mousePos)
+/**
+ * @param itemSize Size of the held item (1x1 when empty-handed). StashMove puts the pointer at the
+ * centre of that area, so the slot found is the top-left cell of an area where the item fits.
+ */
+Point FindClosestStashSlot(Point mousePos, Size itemSize = { 1, 1 })
 {
 	int shortestDistance = std::numeric_limits<int>::max();
 	Point bestSlot = {};
 
 	for (const Point point : PointsInRectangle(Rectangle { { 0, 0 }, Size { 10, 10 } })) {
-		const int distance = mousePos.ManhattanDistance(GetStashSlotCoord(point));
+		if (point.x + itemSize.width > 10 || point.y + itemSize.height > 10)
+			continue;
+		const Point itemCentre = GetStashSlotCoord(point) + Displacement { itemSize.width * INV_SLOT_HALF_SIZE_PX, itemSize.height * INV_SLOT_HALF_SIZE_PX };
+		const int distance = mousePos.ManhattanDistance(itemCentre);
 		if (distance < shortestDistance) {
 			shortestDistance = distance;
 			bestSlot = point;
@@ -1219,9 +1243,8 @@ void LiftInventoryItem()
 
 void LiftStashItem()
 {
-	const Point stashSlot = (ActiveStashSlot != InvalidStashPoint) ? ActiveStashSlot : FindClosestStashSlot(MousePosition);
-
 	Size cursorSizeInCells = MyPlayer->HoldItem.isEmpty() ? Size { 1, 1 } : GetInventorySize(MyPlayer->HoldItem);
+	const Point stashSlot = (ActiveStashSlot != InvalidStashPoint) ? ActiveStashSlot : FindClosestStashSlot(MousePosition, cursorSizeInCells);
 
 	// Find any item occupying a slot that is currently under the cursor
 	const StashStruct::StashCell itemUnderCursor = [](Point stashSlot, Size cursorSizeInCells) -> StashStruct::StashCell {
@@ -1591,10 +1614,9 @@ void StashMove(AxisDirection dir)
 	}
 
 	Slot = -1;
-	if (ActiveStashSlot == InvalidStashPoint)
-		ActiveStashSlot = FindClosestStashSlot(MousePosition);
-
 	Size itemSize = holdItem.isEmpty() ? Size { 1, 1 } : GetInventorySize(holdItem);
+	if (ActiveStashSlot == InvalidStashPoint)
+		ActiveStashSlot = FindClosestStashSlot(MousePosition, itemSize);
 
 	if (dir.x == AxisDirectionX_LEFT) {
 		if (ActiveStashSlot.x > 0) {
@@ -2247,12 +2269,12 @@ void ToggleStashFocus()
 	if (!cursorOnStash) {
 		BeltReturnsToStash = false;
 		Slot = -1;
-		ActiveStashSlot = FindClosestStashSlot(MousePosition);
+		const Size itemSize = holdItem.isEmpty() ? Size { 1, 1 } : GetInventorySize(holdItem);
+		ActiveStashSlot = FindClosestStashSlot(MousePosition, itemSize);
 		if (ActiveStashSlot == InvalidStashPoint)
 			ActiveStashSlot = { 0, 0 };
 
 		Point mousePos = GetStashSlotCoord(ActiveStashSlot);
-		Size itemSize = holdItem.isEmpty() ? Size { 1, 1 } : GetInventorySize(holdItem);
 		mousePos += Displacement { itemSize.width * INV_SLOT_HALF_SIZE_PX, itemSize.height * INV_SLOT_HALF_SIZE_PX };
 		SetCursorPos(mousePos);
 		SpeakText(_("Stash"), /*force=*/true);

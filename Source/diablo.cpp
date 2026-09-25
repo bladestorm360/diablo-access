@@ -830,6 +830,35 @@ void PrepareForFadeIn()
 	}
 }
 
+// SetCursorPos() warps the OS pointer, and SDL echoes that back as a mouse motion event. The echo
+// must not count as the player moving the mouse: that would drop the keyboard inventory/stash cell,
+// which then gets re-derived from the pointer. The pointer sits at the centre of a held item, so for
+// any item taller or wider than one cell that lands on the wrong cell, and the item drifts or
+// refuses to move.
+struct CursorWarp {
+	Point position;
+	uint32_t ticks;
+};
+std::array<CursorWarp, 4> RecentCursorWarps;
+size_t NextCursorWarp;
+
+void RememberCursorWarp(Point position)
+{
+	RecentCursorWarps[NextCursorWarp] = { position, static_cast<uint32_t>(SDL_GetTicks()) };
+	NextCursorWarp = (NextCursorWarp + 1) % RecentCursorWarps.size();
+}
+
+bool IsEchoOfCursorWarp(Point position)
+{
+	const uint32_t now = static_cast<uint32_t>(SDL_GetTicks());
+	// Scaling from window to logical pixels can round the echo by a pixel either way. A duplicate
+	// echo also matches, so a warp is not consumed by its first echo.
+	return std::any_of(RecentCursorWarps.begin(), RecentCursorWarps.end(), [&](const CursorWarp &warp) {
+		return now - warp.ticks < 500
+		    && std::abs(warp.position.x - position.x) <= 2 && std::abs(warp.position.y - position.y) <= 2;
+	});
+}
+
 void GameEventHandler(const SDL_Event &event, uint16_t modState)
 {
 	[[maybe_unused]] const Options &options = GetOptions();
@@ -878,12 +907,17 @@ void GameEventHandler(const SDL_Event &event, uint16_t modState)
 	case SDL_EVENT_KEY_UP:
 		ReleaseKey(SDLC_EventKey(event));
 		return;
-	case SDL_EVENT_MOUSE_MOTION:
+	case SDL_EVENT_MOUSE_MOTION: {
+		const Point position { SDLC_EventMotionIntX(event), SDLC_EventMotionIntY(event) };
+		// MousePosition already holds the exact point that was warped to; the echo may be rounded.
+		if (IsEchoOfCursorWarp(position))
+			return;
 		if (ControlMode == ControlTypes::KeyboardAndMouse && invflag)
 			InvalidateInventorySlot();
-		MousePosition = { SDLC_EventMotionIntX(event), SDLC_EventMotionIntY(event) };
+		MousePosition = position;
 		gmenu_on_mouse_move();
 		return;
+	}
 	case SDL_EVENT_MOUSE_BUTTON_DOWN:
 		MousePosition = { SDLC_EventButtonIntX(event), SDLC_EventButtonIntY(event) };
 		HandleMouseButtonDown(event.button.button, modState);
@@ -2749,6 +2783,7 @@ void SetCursorPos(Point position)
 		return;
 	}
 
+	RememberCursorWarp(position);
 	LogicalToOutput(&position.x, &position.y);
 	if (!demo::IsRunning())
 		SDL_WarpMouseInWindow(ghMainWnd, position.x, position.y);
